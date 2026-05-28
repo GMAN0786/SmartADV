@@ -25,6 +25,8 @@ spring:
 smartadv:
   security:
     admin-emails: ${SMARTADV_ADMIN_EMAILS:}
+    google:
+      client-id: ${SMARTADV_SECURITY_GOOGLE_CLIENT_ID:1008719970978-eeg7238s7t852355hd3cdqc4822ej17n.apps.googleusercontent.com}
   storage:
     mock-s3-dir: ${SMARTADV_STORAGE_DIR:../mock-s3-storage}
   cors:

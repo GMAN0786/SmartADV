@@ -9,9 +9,13 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
-import org.springframework.web.client.RestTemplate;
+import com.google.api.client.googleapis.auth.oauth2.GoogleIdToken;
+import com.google.api.client.googleapis.auth.oauth2.GoogleIdTokenVerifier;
+import com.google.api.client.http.javanet.NetHttpTransport;
+import com.google.api.client.json.gson.GsonFactory;
 
 import java.time.LocalDateTime;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
@@ -25,10 +29,12 @@ public class AuthController {
 
     private final UserRepository userRepository;
     private final SessionTokenRepository sessionTokenRepository;
-    private final RestTemplate restTemplate = new RestTemplate();
 
     @Value("${smartadv.security.admin-emails:}")
     private String adminEmails;
+
+    @Value("${smartadv.security.google.client-id}")
+    private String googleClientId;
 
     public record GoogleLoginRequest(String credential) {}
 
@@ -39,16 +45,20 @@ public class AuthController {
             return ResponseEntity.badRequest().body(Map.of("error", "Missing google credential token."));
         }
 
-        String googleUrl = "https://oauth2.googleapis.com/tokeninfo?id_token=" + idToken;
         try {
-            @SuppressWarnings("unchecked")
-            Map<String, Object> payload = restTemplate.getForObject(googleUrl, Map.class);
-            if (payload == null || payload.containsKey("error_description")) {
+            // Local OIDC Validation using GoogleIdTokenVerifier
+            GoogleIdTokenVerifier verifier = new GoogleIdTokenVerifier.Builder(new NetHttpTransport(), new GsonFactory())
+                    .setAudience(Collections.singletonList(googleClientId))
+                    .build();
+
+            GoogleIdToken idTokenObj = verifier.verify(idToken);
+            if (idTokenObj == null) {
                 return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(Map.of("error", "Invalid Google Token."));
             }
 
-            String googleSub = (String) payload.get("sub");
-            String email = (String) payload.get("email");
+            GoogleIdToken.Payload payload = idTokenObj.getPayload();
+            String googleSub = payload.getSubject();
+            String email = payload.getEmail();
             String name = (String) payload.get("name");
             String picture = (String) payload.get("picture");
 
