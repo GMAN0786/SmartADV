@@ -288,10 +288,23 @@ const NavigationRail1: FunctionComponent<NavigationRail1Type> = ({
             .animate-scale-up {
               animation: scaleUp 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
             }
+            .custom-scrollbar::-webkit-scrollbar {
+              width: 5px;
+            }
+            .custom-scrollbar::-webkit-scrollbar-track {
+              background: transparent;
+            }
+            .custom-scrollbar::-webkit-scrollbar-thumb {
+              background: rgba(156, 163, 175, 0.2);
+              border-radius: 99px;
+            }
+            .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+              background: rgba(156, 163, 175, 0.4);
+            }
           `}</style>
 
           <div 
-            className="w-full max-w-md bg-white/80 dark:bg-slate-900/90 border border-slate-200/50 dark:border-slate-800/50 rounded-2xl shadow-2xl p-6 relative overflow-hidden backdrop-blur-xl animate-scale-up"
+            className="w-full max-w-md bg-white/80 dark:bg-slate-900/90 border border-slate-200/50 dark:border-slate-800/50 rounded-2xl shadow-2xl p-6 relative overflow-y-auto max-h-[90vh] custom-scrollbar backdrop-blur-xl animate-scale-up"
             onClick={(e) => e.stopPropagation()}
             style={{
               fontFamily: "Roboto, system-ui, -apple-system, sans-serif",
