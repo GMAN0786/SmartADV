@@ -141,6 +141,27 @@ public class WorkerClientService {
             checkCancelled(job.getId());
             if (exitCode != 0) throw new RuntimeException("LLM.py failed with exit code " + exitCode);
 
+            // Read token usage info written by LLM.py
+            try {
+                Path tokenUsageFile = Paths.get(smartadvOutput).resolve("token_usage.txt");
+                if (Files.exists(tokenUsageFile)) {
+                    String content = Files.readString(tokenUsageFile).trim();
+                    String[] parts = content.split(",");
+                    if (parts.length >= 2) {
+                        Long inputTokens = Long.parseLong(parts[0]);
+                        Long outputTokens = Long.parseLong(parts[1]);
+                        analysisJobRepository.findById(job.getId()).ifPresent(j -> {
+                            j.updateLlmTokens(inputTokens, outputTokens);
+                            analysisJobRepository.save(j);
+                            log.info("Successfully updated LLM token usage for job {}: input={}, output={}", 
+                                    job.getId(), inputTokens, outputTokens);
+                        });
+                    }
+                }
+            } catch (Exception e) {
+                log.error("Failed to read or parse LLM token usage file for job " + job.getId(), e);
+            }
+
             // 4. TTS_GENERATING (67% ~ 99%)
             updateJobStatus(job.getId(), "TTS_GENERATING", 67);
             updateJobDetail(job.getId(), "음성 합성 엔진 시작 중...", 67);
@@ -263,6 +284,11 @@ public class WorkerClientService {
         pb.environment().put("SMARTADV_INPUT", smartadvInput);
         pb.environment().put("SMARTADV_OUTPUT", smartadvOutput);
         pb.environment().put("PYTHONUNBUFFERED", "1");
+
+        // Pass user setting clipMode
+        AnalysisJob curJob = analysisJobRepository.findById(jobId).orElse(null);
+        String clipModeVal = (curJob != null && curJob.getClipMode() != null) ? curJob.getClipMode() : "AUTO";
+        pb.environment().put("SMARTADV_CLIP_MODE", clipModeVal);
 
         // Modal 인증 토큰 전달 (modal deploy 이후 engine_backup.py에서 .remote()/.map() 호출에 필요)
         String modalTokenId = System.getenv("MODAL_TOKEN_ID");

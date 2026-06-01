@@ -29,16 +29,23 @@ public class AnalysisJob {
 
     private String errorMessage;
 
+    private Long llmInputTokens;
+    private Long llmOutputTokens;
+
     private LocalDateTime startedAt;
     private LocalDateTime finishedAt;
 
+    @Column(name = "clip_mode")
+    private String clipMode;
+
     @Builder
-    public AnalysisJob(Long videoId, Long userId) {
+    public AnalysisJob(Long videoId, Long userId, String clipMode) {
         this.videoId = videoId;
         this.userId = userId;
         this.status = "PENDING";
         this.progress = 0;
         this.statusDetail = "";
+        this.clipMode = clipMode != null ? clipMode : "AUTO";
         this.startedAt = LocalDateTime.now();
     }
 
@@ -53,6 +60,11 @@ public class AnalysisJob {
     public void updateStatusDetail(String statusDetail, Integer progress) {
         this.statusDetail = statusDetail;
         this.progress = progress;
+    }
+
+    public void updateLlmTokens(Long llmInputTokens, Long llmOutputTokens) {
+        this.llmInputTokens = llmInputTokens;
+        this.llmOutputTokens = llmOutputTokens;
     }
 
     public void fail(String errorMessage) {

@@ -83,10 +83,11 @@ const Main: FunctionComponent = () => {
         headers["Authorization"] = "Bearer " + savedToken;
       }
 
+      const clipMode = localStorage.getItem("smartadv_clip_mode") || "AUTO";
       const res = await fetch("/api/videos/youtube", {
         method: "POST",
         headers,
-        body: JSON.stringify({ url: raw })
+        body: JSON.stringify({ url: raw, clipMode })
       });
 
       if (res.ok) {

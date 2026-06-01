@@ -434,16 +434,26 @@ def main():
     image_tokens = total_images * 1120
     video_tokens = total_video_duration * 140  # 2fps * 70 tokens/frame = 140 tokens/sec
 
-    print(f"\n[비용 분석]")
+    # SMARTADV_CLIP_MODE 환경변수 획득
+    clip_mode = os.getenv("SMARTADV_CLIP_MODE", "AUTO")
+    print(f"\n[비용 분석 및 작동 모드 결정] (설정된 모드: {clip_mode})")
     print(f" - 총 이미지 예상 수: {total_images} 장 (예상 토큰: {image_tokens:,})")
     print(f" - 총 비디오 예상 재생 시간: {total_video_duration:.2f} 초 (예상 토큰: {video_tokens:,.0f})")
 
-    if total_images > 0 and image_tokens > video_tokens:
-        llm_mode = "VIDEO"
-        print(f" -> 이미지 비용({image_tokens:,} 토큰)이 비디오 비용({video_tokens:,.0f} 토큰)보다 비싸므로 VIDEO 모드로 전환합니다.")
-    else:
+    if clip_mode == "FORCE_IMAGE":
         llm_mode = "IMAGE"
-        print(f" -> 이미지 비용({image_tokens:,} 토큰)이 더 효율적이거나 비디오가 필요 없으므로 IMAGE 모드를 유지합니다.")
+        print(" -> [강제 설정] FORCE_IMAGE 모드에 의해 항상 IMAGE 모드로 동작합니다.")
+    elif clip_mode == "FORCE_VIDEO":
+        llm_mode = "VIDEO"
+        print(" -> [강제 설정] FORCE_VIDEO 모드에 의해 항상 VIDEO 모드로 동작합니다.")
+    else:
+        # AUTO 모드
+        if total_images > 0 and image_tokens > video_tokens:
+            llm_mode = "VIDEO"
+            print(f" -> 이미지 비용({image_tokens:,} 토큰)이 비디오 비용({video_tokens:,.0f} 토큰)보다 비싸므로 VIDEO 모드로 전환합니다.")
+        else:
+            llm_mode = "IMAGE"
+            print(f" -> 이미지 비용({image_tokens:,} 토큰)이 더 효율적이거나 비디오가 필요 없으므로 IMAGE 모드를 유지합니다.")
 
     # llm_mode.txt 에 저장
     mode_file = os.path.join(OUTPUT_DIR, "llm_mode.txt")

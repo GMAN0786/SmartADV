@@ -181,6 +181,8 @@ const DragDrop: FunctionComponent = () => {
 
               const formData = new FormData();
               formData.append("file", file);
+              const clipMode = localStorage.getItem("smartadv_clip_mode") || "AUTO";
+              formData.append("clipMode", clipMode);
               
               setUploadProgress(0);
 

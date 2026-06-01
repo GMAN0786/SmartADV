@@ -26,7 +26,9 @@ public class VideoController {
     private final AnalysisJobRepository analysisJobRepository;
 
     @PostMapping("/upload")
-    public ResponseEntity<?> uploadVideo(@RequestParam("file") MultipartFile file) {
+    public ResponseEntity<?> uploadVideo(
+            @RequestParam("file") MultipartFile file,
+            @RequestParam(value = "clipMode", required = false) String clipMode) {
         User currentUser = UserContext.getCurrentUser();
         if (currentUser == null) {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(Map.of("error", "Not logged in."));
@@ -49,7 +51,7 @@ public class VideoController {
             }
         }
 
-        Video savedVideo = videoService.uploadVideo(file, currentUser.getId());
+        Video savedVideo = videoService.uploadVideo(file, currentUser.getId(), clipMode);
         return ResponseEntity.ok(new VideoResponse(savedVideo));
     }
 
@@ -87,7 +89,8 @@ public class VideoController {
             }
         }
 
-        Video savedVideo = videoService.uploadYoutubeVideo(youtubeUrl, currentUser.getId());
+        String clipMode = request.get("clipMode");
+        Video savedVideo = videoService.uploadYoutubeVideo(youtubeUrl, currentUser.getId(), clipMode);
         return ResponseEntity.ok(new VideoResponse(savedVideo));
     }
 }
