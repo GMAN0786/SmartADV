@@ -40,21 +40,6 @@ function App() {
     }
   }, [action, pathname]);
 
-  if (isLoadingMaintenance) {
-    return (
-      <div className="flex h-screen w-full items-center justify-center bg-[#0f172a] text-white">
-        <div className="flex flex-col items-center gap-4">
-          <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-blue-500"></div>
-          <p className="text-sm font-medium tracking-wide text-slate-400 font-[Inter]">Loading SmartADV...</p>
-        </div>
-      </div>
-    );
-  }
-
-  if (isMaintenanceMode && (!user || user.role !== "ADMIN")) {
-    return <MaintenancePage />;
-  }
-
   useEffect(() => {
     let title = "";
     let metaDescription = "";
@@ -112,6 +97,21 @@ function App() {
       }
     }
   }, [pathname]);
+
+  if (isLoadingMaintenance) {
+    return (
+      <div className="flex h-screen w-full items-center justify-center bg-[#0f172a] text-white">
+        <div className="flex flex-col items-center gap-4">
+          <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-blue-500"></div>
+          <p className="text-sm font-medium tracking-wide text-slate-400 font-[Inter]">Loading SmartADV...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (isMaintenanceMode && (!user || user.role !== "ADMIN")) {
+    return <MaintenancePage />;
+  }
 
   return (
     <Routes>
