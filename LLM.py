@@ -246,144 +246,68 @@ def collect_scene_media(silences: Dict[int, SilenceInfo], output_dir: Path, mode
         print(f"[입력] 키프레임 이미지 {count}개 로드 완료")
 
 
-def build_prompt_image(silences: Dict[int, SilenceInfo]) -> str:
-    prompt_lines: List[str] = []
-    prompt_lines.extend([
+def build_prompt_image() -> str:
+    prompt_lines: List[str] = [
         "당신은 시각장애인을 위한 전문 오디오 화면해설(Audio Description) 작가입니다.",
-        "각 scene의 키프레임 이미지를 시간순으로 보고 해설 대본을 작성합니다.",
+        "제공된 각 scene의 키프레임 이미지들을 시간순으로 시청하고 해설 대본을 작성합니다.",
         "해설 오디오는 각 scene의 window_start(첫 장면전환 시각) 직후부터 재생됩니다.",
         "",
         "[핵심 규칙]",
         "1. 제공된 키프레임 이미지들은 시간순으로 정렬되어 있습니다.",
-        "   - Scene 내에 각 장면이 순서대로 제공됩니다.",
-        "   - 이미지 순서를 따라 장면 변화를 파악하고 해설을 작성합니다.",
-        "2. 전후 대사는 행동 추론 참고용으로만 사용하고, 출력 문장에 직접 쓰지 않습니다.",
-        "3. 감정 해석, 소리 묘사, 추측성 표현은 금지합니다.",
+        "   각 장면 내의 비디오 프레임 순서를 따라 동작과 상황 변화를 면밀히 분석하세요.",
+        "2. 전후 대사([전 대사], [후 대사])는 화면 밖의 행동 인과관계나 흐름을 이해하는 참고용으로만 사용하고, 출력 해설 문장에는 절대 대사를 직접 쓰지 마십시오.",
+        "3. 감정 해석, 소리 묘사, 추측성 표현, 은유적 묘사는 전면 금지합니다.",
+        "   반드시 시각적으로 식별 가능한 물리적 행동(예: '고개를 끄덕인다', '손을 흔든다')만 객관적으로 묘사하세요.",
         f"4. TTS 발화 속도는 초당 약 {TTS_SYLLABLES_PER_SECOND}음절입니다.",
-        f"   window_duration에서 {TTS_MARGIN_SECONDS}초를 뺀 시간 안에 읽힐 분량으로 작성합니다.",
-        "   (예: window 8.0초 → 최대 약 30음절 / window 5.0초 → 최대 약 18음절)",
-        "5. 출력은 반드시 CSV만 반환합니다. 코드블록, 설명문, 마크다운을 절대 추가하지 않습니다.",
+        "   각 scene 정보에 제공된 '최대음절' 수 제한을 엄격하게 지켜 분량을 작성해야 합니다.",
+        "5. 출력은 반드시 CSV만 반환합니다. 코드블록, 설명문, 마크다운을 절대 추가하지 마십시오.",
         "",
         "[출력 CSV 스키마]",
         "silence_id,scene_id,window_start,window_end,text",
-        "- scene_id: 해당 silence 내 scene 번호 (숫자만, 예: 1, 2, 3)",
+        "- silence_id: 해당 무음구간 번호 (숫자만)",
+        "- scene_id: 해당 무음구간 내 scene 번호 (숫자만)",
         "- window_start: scene의 첫 장면전환 시각 (HH:MM:SS:mmm)",
         "- window_end: 다음 scene의 첫 장면전환 시각 또는 silence 끝 (HH:MM:SS:mmm)",
         "- text: TTS에 바로 넣을 수 있는 평어체 한 문장 또는 두 문장",
         "",
-        "[입력 데이터]",
-    ])
-
-    for silence_id in sorted(silences):
-        silence = silences[silence_id]
-        prompt_lines.append(f"## silence{silence.silence_id:03d}")
-        prompt_lines.append(
-            f"구간: {seconds_to_hhmmss(silence.start_seconds)} ~ {seconds_to_hhmmss(silence.end_seconds)}"
-        )
-
-        if silence.context_before_lines:
-            prompt_lines.append("[전 대사]")
-            prompt_lines.extend(silence.context_before_lines)
-        else:
-            prompt_lines.append("[전 대사]\n대사 없음")
-
-        if silence.context_after_lines:
-            prompt_lines.append("[후 대사]")
-            prompt_lines.extend(silence.context_after_lines)
-        else:
-            prompt_lines.append("[후 대사]\n대사 없음")
-
-        if not silence.scenes:
-            prompt_lines.append("[장면전환 없음 — 해설 불필요]")
-        else:
-            prompt_lines.append("[scene 목록]")
-            for scene in silence.scenes:
-                max_narration_sec = max(0.0, scene.window_duration - TTS_MARGIN_SECONDS)
-                max_syllables = int(max_narration_sec * TTS_SYLLABLES_PER_SECOND)
-                prompt_lines.append(
-                    f"- scene{scene.scene_id:03d}: "
-                    f"window={seconds_to_hhmmss(scene.window_start_abs)}~{seconds_to_hhmmss(scene.window_end_abs)}, "
-                    f"window_duration={scene.window_duration:.3f}s, "
-                    f"이미지 {len(scene.images)}장, "
-                    f"최대음절={max_syllables}자"
-                )
-                for img in scene.images:
-                    prompt_lines.append(f"  * {img.name}")
-        prompt_lines.append("")
-
-    prompt_lines.append("반드시 CSV 헤더부터 출력하십시오.")
-    prompt = "\n".join(prompt_lines)
-    print(f"[프롬프트] 생성 완료: {len(prompt)}자")
-    return prompt
+        "반드시 CSV 헤더(silence_id,scene_id,window_start,window_end,text)부터 출력을 시작하십시오."
+    ]
+    return "\n".join(prompt_lines)
 
 
-def build_prompt_video(silences: Dict[int, SilenceInfo]) -> str:
-    prompt_lines: List[str] = []
-    prompt_lines.extend([
+def build_prompt_video() -> str:
+    prompt_lines: List[str] = [
         "당신은 시각장애인을 위한 전문 오디오 화면해설(Audio Description) 작가입니다.",
-        "각 scene의 480p 동영상 클립을 보고 해설 대본을 작성합니다.",
+        "제공된 각 scene의 480p 동영상 클립을 보고 해설 대본을 작성합니다.",
         "해설 오디오는 각 scene의 window_start(첫 장면전환 시각) 직후부터 재생됩니다.",
         "",
         "[핵심 규칙]",
         "1. 제공된 동영상 클립을 시청하고, 해당 scene 내의 장면 변화 및 인물의 행동을 파악하여 해설을 작성합니다.",
-        "2. 전후 대사는 행동 추론 참고용으로만 사용하고, 출력 문장에 직접 쓰지 않습니다.",
-        "3. 감정 해석, 소리 묘사, 추측성 표현은 금지합니다.",
+        "2. 전후 대사([전 대사], [후 대사])는 화면 밖의 행동 인과관계나 흐름을 이해하는 참고용으로만 사용하고, 출력 해설 문장에는 절대 대사를 직접 쓰지 마십시오.",
+        "3. 감정 해석, 소리 묘사, 추측성 표현, 은유적 묘사는 전면 금지합니다.",
+        "   반드시 비디오 클립 화면 내에 실제로 포착되는 물리적 행동(예: '고개를 끄덕인다', '손을 흔든다')만 사실에 입각하여 묘사해야 합니다.",
         f"4. TTS 발화 속도는 초당 약 {TTS_SYLLABLES_PER_SECOND}음절입니다.",
-        f"   window_duration에서 {TTS_MARGIN_SECONDS}초를 뺀 시간 안에 읽힐 분량으로 작성합니다.",
-        "   (예: window 8.0초 → 최대 약 30음절 / window 5.0초 → 최대 약 18음절)",
-        "5. 출력은 반드시 CSV만 반환합니다. 코드블록, 설명문, 마크다운을 절대 추가하지 않습니다.",
-        "6. 제공된 동영상에 대하여, 정확히 동영상 내에서 일어난 장면변화만을 묘사하세요. 장면간의 인과관계를 추축하지 마세요.",
-        "7. 한 동영상 클립을 시청하였을때, 가장 핵심적인 장면전환을 위주로 설명합니다.",
+        "   각 scene 정보에 제공된 '최대음절' 수 제한을 엄격하게 지켜 분량을 작성해야 합니다.",
+        "5. 제공된 동영상 클립에 대하여, 오직 클립 내에서 실제로 발생한 상황만 묘사하세요. 클립 외부의 인과관계를 자의적으로 상상하여 살을 붙이지 마십시오.",
+        "6. 한 동영상 클립 내에서 가장 핵심적이고 의미 있는 장면 변화나 동작을 위주로 설명합니다.",
+        "7. 🌟동작 타이밍 및 동기화 (재생 싱크 정합성)🌟",
+        "   동영상 클립 내에서 설명하려는 핵심 행동이나 장면 변화가 일어나는 시점(클립 시작점 0.0초 기준 상대 시간 초)을 소수점 첫째 자리까지 정확하게 측정(추론)하세요.",
+        "   그리고 출력 CSV의 'text' 컬럼 맨 앞에 '[+상대시간초]' 접두사를 강제로 붙여 출력하십시오.",
+        "   (예: 동영상이 시작하고 1.5초 지점에서 핵심 동작이 일어나는 경우: '[+1.5] 남자가 컴퓨터 화면을 응시합니다.')",
+        "   (예: 동영상이 시작하자마자 동작이 일어나는 경우: '[+0.0] 여자가 환하게 웃습니다.')",
+        "8. 출력은 반드시 CSV만 반환합니다. 코드블록, 설명문, 마크다운을 절대 추가하지 마십시오.",
         "",
         "[출력 CSV 스키마]",
         "silence_id,scene_id,window_start,window_end,text",
-        "- scene_id: 해당 silence 내 scene 번호 (숫자만, 예: 1, 2, 3)",
+        "- silence_id: 해당 무음구간 번호 (숫자만)",
+        "- scene_id: 해당 무음구간 내 scene 번호 (숫자만)",
         "- window_start: scene의 첫 장면전환 시각 (HH:MM:SS:mmm)",
         "- window_end: 다음 scene의 첫 장면전환 시각 또는 silence 끝 (HH:MM:SS:mmm)",
-        "- text: TTS에 바로 넣을 수 있는 평어체 한 문장 또는 두 문장",
+        "- text: '[+상대시간초] 해설문장' 형식 (예: '[+1.5] 남자가 걸어갑니다.')",
         "",
-        "[입력 데이터]",
-    ])
-
-    for silence_id in sorted(silences):
-        silence = silences[silence_id]
-        prompt_lines.append(f"## silence{silence.silence_id:03d}")
-        prompt_lines.append(
-            f"구간: {seconds_to_hhmmss(silence.start_seconds)} ~ {seconds_to_hhmmss(silence.end_seconds)}"
-        )
-
-        if silence.context_before_lines:
-            prompt_lines.append("[전 대사]")
-            prompt_lines.extend(silence.context_before_lines)
-        else:
-            prompt_lines.append("[전 대사]\n대사 없음")
-
-        if silence.context_after_lines:
-            prompt_lines.append("[후 대사]")
-            prompt_lines.extend(silence.context_after_lines)
-        else:
-            prompt_lines.append("[후 대사]\n대사 없음")
-
-        if not silence.scenes:
-            prompt_lines.append("[장면전환 없음 — 해설 불필요]")
-        else:
-            prompt_lines.append("[scene 목록]")
-            for scene in silence.scenes:
-                max_narration_sec = max(0.0, scene.window_duration - TTS_MARGIN_SECONDS)
-                max_syllables = int(max_narration_sec * TTS_SYLLABLES_PER_SECOND)
-                prompt_lines.append(
-                    f"- scene{scene.scene_id:03d}: "
-                    f"window={seconds_to_hhmmss(scene.window_start_abs)}~{seconds_to_hhmmss(scene.window_end_abs)}, "
-                    f"window_duration={scene.window_duration:.3f}s, "
-                    f"동영상 클립: {scene.video_path.name if scene.video_path else 'None'}, "
-                    f"최대음절={max_syllables}자"
-                )
-        prompt_lines.append("")
-
-    prompt_lines.append("반드시 CSV 헤더부터 출력하십시오.")
-    prompt = "\n".join(prompt_lines)
-    print(f"[프롬프트] 생성 완료: {len(prompt)}자")
-    return prompt
+        "반드시 CSV 헤더(silence_id,scene_id,window_start,window_end,text)부터 출력을 시작하십시오."
+    ]
+    return "\n".join(prompt_lines)
 
 
 def split_silences_into_batches(silences: Dict[int, SilenceInfo], max_scenes_per_batch: int = 10) -> List[Dict[int, SilenceInfo]]:
@@ -558,7 +482,28 @@ def build_multimodal_contents_for_batch(prompt: str, silences: Dict[int, Silence
             for scene in silence.scenes:
                 if not scene.video_path or not scene.video_path.exists():
                     continue
-                contents.append(f"[silence{silence.silence_id:03d} scene{scene.scene_id:03d} 동영상]")
+                
+                window_start = seconds_to_hhmmss(scene.window_start_abs)
+                window_end = seconds_to_hhmmss(scene.window_end_abs)
+                max_syllables = int(max(0.0, scene.window_duration - TTS_MARGIN_SECONDS) * TTS_SYLLABLES_PER_SECOND)
+                
+                context_before = " ".join(silence.context_before_lines) if silence.context_before_lines else "대사 없음"
+                context_after = " ".join(silence.context_after_lines) if silence.context_after_lines else "대사 없음"
+                
+                metadata_header = (
+                    f"--- SCENE METADATA ---\n"
+                    f"silence_id: {silence.silence_id}\n"
+                    f"scene_id: {scene.scene_id}\n"
+                    f"window_start: {window_start}\n"
+                    f"window_end: {window_end}\n"
+                    f"window_duration: {scene.window_duration:.2f}s\n"
+                    f"최대음절: {max_syllables}\n"
+                    f"[전 대사]: {context_before}\n"
+                    f"[후 대사]: {context_after}\n"
+                    f"----------------------\n"
+                )
+                
+                contents.append(metadata_header)
                 uploaded_file = uploaded_files_map[scene.video_path]
                 contents.append(uploaded_file)
                 uploaded_file_names.append(uploaded_file.name)
@@ -572,7 +517,28 @@ def build_multimodal_contents_for_batch(prompt: str, silences: Dict[int, Silence
                 existing_images = [p for p in scene.images if p.exists()]
                 if not existing_images:
                     continue
-                contents.append(f"[silence{silence.silence_id:03d} scene{scene.scene_id:03d} 이미지]")
+                
+                window_start = seconds_to_hhmmss(scene.window_start_abs)
+                window_end = seconds_to_hhmmss(scene.window_end_abs)
+                max_syllables = int(max(0.0, scene.window_duration - TTS_MARGIN_SECONDS) * TTS_SYLLABLES_PER_SECOND)
+                
+                context_before = " ".join(silence.context_before_lines) if silence.context_before_lines else "대사 없음"
+                context_after = " ".join(silence.context_after_lines) if silence.context_after_lines else "대사 없음"
+                
+                metadata_header = (
+                    f"--- SCENE METADATA ---\n"
+                    f"silence_id: {silence.silence_id}\n"
+                    f"scene_id: {scene.scene_id}\n"
+                    f"window_start: {window_start}\n"
+                    f"window_end: {window_end}\n"
+                    f"window_duration: {scene.window_duration:.2f}s\n"
+                    f"최대음절: {max_syllables}\n"
+                    f"[전 대사]: {context_before}\n"
+                    f"[후 대사]: {context_after}\n"
+                    f"----------------------\n"
+                )
+                
+                contents.append(metadata_header)
                 for image_path in existing_images:
                     uploaded_file = uploaded_files_map[image_path]
                     contents.append(uploaded_file)
@@ -714,6 +680,8 @@ def align_and_correct_csv(csv_text: str, batch_silences: Dict[int, SilenceInfo])
                 "scene_id": scene.scene_id,
                 "window_start": seconds_to_hhmmss(scene.window_start_abs),
                 "window_end": seconds_to_hhmmss(scene.window_end_abs),
+                "window_start_abs": scene.window_start_abs,
+                "window_end_abs": scene.window_end_abs,
                 "matched": False
             })
 
@@ -768,6 +736,23 @@ def align_and_correct_csv(csv_text: str, batch_silences: Dict[int, SilenceInfo])
             if len(row) > 0:
                 matched_text = row[-1].strip() # 마지막 컬럼인 text
                 exp["matched"] = True
+
+        # [+상대초] 동기화 태그 파싱 및 sync 조정 (비디오 모드 한정)
+        if matched_text and LLM_MODE == "VIDEO":
+            # [+1.5], [+2], [+2.3], **[+1.5]** 등 유연하게 매칭
+            match = re.match(r'^(?:\*\*|)?\[\+\s*([0-9]+(?:\.[0-9]+)?)(?:s|초)?\](?:\*\*|)?\s*(.*)', matched_text)
+            if match:
+                offset_seconds = float(match.group(1))
+                cleaned_text = match.group(2).strip()
+                
+                # 원본 scene 시작점으로부터 상대초만큼 시프트
+                new_start_abs = exp["window_start_abs"] + offset_seconds
+                # window_end_abs 범위를 벗어나지 않도록 clamp (안전 장치)
+                if new_start_abs > exp["window_end_abs"]:
+                    new_start_abs = exp["window_end_abs"]
+                
+                exp["window_start"] = seconds_to_hhmmss(new_start_abs)
+                matched_text = cleaned_text
 
         # 만약 매칭된 텍스트가 없으면 최소한의 처리 또는 스킵 (혹은 Gemini 텍스트 직접 사용)
         if matched_text:
@@ -904,9 +889,9 @@ def main() -> None:
 
     def process_batch_worker(batch_idx: int, batch_silences: Dict[int, SilenceInfo]):
         if LLM_MODE == "VIDEO":
-            batch_prompt = build_prompt_video(batch_silences)
+            batch_prompt = build_prompt_video()
         else:
-            batch_prompt = build_prompt_image(batch_silences)
+            batch_prompt = build_prompt_image()
         
         return call_gemini_for_batch(client, batch_prompt, batch_silences, LLM_MODE, batch_idx + 1, len(batches))
 
