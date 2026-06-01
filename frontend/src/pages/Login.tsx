@@ -31,7 +31,7 @@ const Login: FunctionComponent = () => {
   };
 
   useEffect(() => {
-    const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID || "1008719970978-eeg7238s7t852355hd3cdqc4822ej17n.apps.googleusercontent.com";
+    const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID || "707400599606-egvev8ntmg5tost1e6ijhevqm3um3hgq.apps.googleusercontent.com";
     
     const initializeGoogle = () => {
       if ((window as any).google) {
