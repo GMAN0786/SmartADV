@@ -443,41 +443,127 @@ def split_silences_into_batches(silences: Dict[int, SilenceInfo], max_scenes_per
     return batches
 
 
+def upload_and_wait_all_files(client, file_paths: List[Path], batch_num: int, total_batches: int) -> Dict[Path, object]:
+    """배치 내의 모든 미디어 파일을 concurrent.futures를 사용해 병렬로 업로드하고,
+    이후 단일 폴링 루프를 통해 모든 파일이 ACTIVE 상태가 될 때까지 병렬 대기합니다.
+    """
+    unique_paths = sorted(list(set(file_paths)))
+    if not unique_paths:
+        return {}
+
+    print(f"[Batch {batch_num}/{total_batches}] 파일 병렬 업로드 개시: 총 {len(unique_paths)}개")
+    path_to_uploaded = {}
+    
+    def upload_worker(path: Path):
+        try:
+            uploaded = client.files.upload(file=str(path))
+            return path, uploaded
+        except Exception as e:
+            print(f"[Batch {batch_num}/{total_batches}] 업로드 실패 ({path.name}): {e}")
+            raise
+
+    # 1. 병렬 업로드 실행
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(unique_paths)) as executor:
+        futures = {executor.submit(upload_worker, p): p for p in unique_paths}
+        for future in concurrent.futures.as_completed(futures):
+            path = futures[future]
+            try:
+                p, uploaded = future.result()
+                path_to_uploaded[p] = uploaded
+            except Exception as e:
+                raise RuntimeError(f"파일 업로드 중 오류 발생: {path.name}") from e
+
+    print(f"[Batch {batch_num}/{total_batches}] 모든 파일 업로드 완료. 병렬 상태 검사(ACTIVE) 시작...")
+
+    # 2. 단일 폴링 루프를 통해 모든 파일이 ACTIVE가 될 때까지 대기
+    deadline = time.time() + GEMINI_FILE_POLL_TIMEOUT_SECONDS
+    pending_paths = list(unique_paths)
+    final_files = {}
+
+    while pending_paths and time.time() < deadline:
+        next_pending = []
+        
+        def poll_worker(path: Path):
+            uploaded = path_to_uploaded[path]
+            try:
+                current = client.files.get(name=uploaded.name)
+                return path, current
+            except Exception as e:
+                print(f"[Batch {batch_num}/{total_batches}] 상태 조회 실패 ({path.name}): {e}")
+                raise
+
+        # 병렬로 각 파일의 상태를 조회
+        with concurrent.futures.ThreadPoolExecutor(max_workers=len(pending_paths)) as poll_executor:
+            poll_futures = {poll_executor.submit(poll_worker, p): p for p in pending_paths}
+            for future in concurrent.futures.as_completed(poll_futures):
+                path = poll_futures[future]
+                try:
+                    p, current = future.result()
+                    state = getattr(current, "state", None)
+                    state_name = getattr(state, "name", str(state)) if state is not None else "UNKNOWN"
+
+                    if state_name == "ACTIVE":
+                        final_files[p] = current
+                    elif state_name == "FAILED":
+                        raise RuntimeError(f"Gemini Files API 처리 실패: {p.name} -> {current.name}")
+                    else:
+                        next_pending.append(p)
+                except Exception as e:
+                    raise RuntimeError(f"파일 상태 조회 중 오류 발생: {path.name}") from e
+
+        pending_paths = next_pending
+        if pending_paths:
+            time.sleep(GEMINI_FILE_POLL_INTERVAL_SECONDS)
+
+    if pending_paths:
+        raise TimeoutError(f"Gemini Files API 활성화 대기 타임아웃: {[p.name for p in pending_paths]}")
+
+    print(f"[Batch {batch_num}/{total_batches}] 모든 파일 ACTIVE 활성화 완료")
+    return final_files
+
+
 def build_multimodal_contents_for_batch(prompt: str, silences: Dict[int, SilenceInfo], client, mode: str, batch_num: int, total_batches: int) -> Tuple[List[object], List[str]]:
     """해당 배치 스레드의 파일들을 Files API에 병렬 업로드하고 교차 배치합니다."""
     contents: List[object] = [prompt]
     uploaded_file_names: List[str] = []
 
+    # 1. 업로드할 모든 파일의 경로를 먼저 수집합니다.
+    file_paths: List[Path] = []
     if mode == "VIDEO":
-        total_videos = sum(
-            1 for silence in silences.values()
-            for scene in silence.scenes
-            if scene.video_path and scene.video_path.exists()
-        )
-        print(f"[Batch {batch_num}/{total_batches}] Files API 업로드 시작: 총 비디오 {total_videos}개")
+        for silence_id in sorted(silences):
+            silence = silences[silence_id]
+            for scene in silence.scenes:
+                if scene.video_path and scene.video_path.exists():
+                    file_paths.append(scene.video_path)
+    else:
+        for silence_id in sorted(silences):
+            silence = silences[silence_id]
+            for scene in silence.scenes:
+                for img_path in scene.images:
+                    if img_path.exists():
+                        file_paths.append(img_path)
 
-        vid_idx = 0
+    # 2. 모든 파일을 병렬로 업로드하고 ACTIVE 상태가 될 때까지 병렬 대기합니다.
+    uploaded_files_map = upload_and_wait_all_files(client, file_paths, batch_num, total_batches)
+
+    # 3. 원래의 텍스트와 파일 오브젝트 순서를 유지하면서 contents를 구성합니다.
+    if mode == "VIDEO":
+        total_videos = len(file_paths)
+        print(f"[Batch {batch_num}/{total_batches}] contents 리스트 구성 중: 총 비디오 {total_videos}개")
+
         for silence_id in sorted(silences):
             silence = silences[silence_id]
             for scene in silence.scenes:
                 if not scene.video_path or not scene.video_path.exists():
                     continue
                 contents.append(f"[silence{silence.silence_id:03d} scene{scene.scene_id:03d} 동영상]")
-                vid_idx += 1
-                print(f"[Batch {batch_num}/{total_batches}] 비디오 업로드 중 ({vid_idx}/{total_videos}): {scene.video_path.name}")
-                uploaded_file = upload_gemini_file(client, scene.video_path)
+                uploaded_file = uploaded_files_map[scene.video_path]
                 contents.append(uploaded_file)
                 uploaded_file_names.append(uploaded_file.name)
-        print(f"[Batch {batch_num}/{total_batches}] 비디오 파일 업로드 완료")
     else:
-        total_images = sum(
-            1 for silence in silences.values()
-            for scene in silence.scenes
-            for img_path in scene.images if img_path.exists()
-        )
-        print(f"[Batch {batch_num}/{total_batches}] Files API 업로드 시작: 총 이미지 {total_images}개")
+        total_images = len(file_paths)
+        print(f"[Batch {batch_num}/{total_batches}] contents 리스트 구성 중: 총 이미지 {total_images}개")
 
-        img_idx = 0
         for silence_id in sorted(silences):
             silence = silences[silence_id]
             for scene in silence.scenes:
@@ -486,34 +572,11 @@ def build_multimodal_contents_for_batch(prompt: str, silences: Dict[int, Silence
                     continue
                 contents.append(f"[silence{silence.silence_id:03d} scene{scene.scene_id:03d} 이미지]")
                 for image_path in existing_images:
-                    img_idx += 1
-                    print(f"[Batch {batch_num}/{total_batches}] 이미지 업로드 중 ({img_idx}/{total_images}): {image_path.name}")
-                    uploaded_file = upload_gemini_file(client, image_path)
+                    uploaded_file = uploaded_files_map[image_path]
                     contents.append(uploaded_file)
                     uploaded_file_names.append(uploaded_file.name)
-        print(f"[Batch {batch_num}/{total_batches}] 이미지 파일 업로드 완료")
 
     return contents, uploaded_file_names
-
-
-def upload_gemini_file(client, file_path: Path):
-    """단일 미디어 파일을 Gemini Files API에 업로드하고 ACTIVE 상태가 될 때까지 대기합니다."""
-    uploaded_file = client.files.upload(file=str(file_path))
-    deadline = time.time() + GEMINI_FILE_POLL_TIMEOUT_SECONDS
-
-    while time.time() < deadline:
-        current = client.files.get(name=uploaded_file.name)
-        state = getattr(current, "state", None)
-        state_name = getattr(state, "name", str(state)) if state is not None else "UNKNOWN"
-
-        if state_name == "ACTIVE":
-            return current
-        if state_name == "FAILED":
-            raise RuntimeError(f"Gemini Files API 처리 실패: {file_path} -> {uploaded_file.name}")
-
-        time.sleep(GEMINI_FILE_POLL_INTERVAL_SECONDS)
-
-    raise TimeoutError(f"Gemini Files API 활성화 대기 타임아웃: {file_path} -> {uploaded_file.name}")
 
 
 def delete_uploaded_gemini_files(client, file_names: List[str]) -> None:

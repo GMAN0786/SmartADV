@@ -36,7 +36,6 @@ OUTPUT_DIR = os.getenv("SMARTADV_OUTPUT", "output_clips")
 
 # Silero VAD 모델이 분석하기 위해 사용할 임시 오디오 파일의 이름
 TEMP_WAV = os.path.join(OUTPUT_DIR, "temp_16k.wav")
-TEMP_PROXY = os.path.join(OUTPUT_DIR, "temp_480p.mp4")
 
 # 너무 짧은 구간을 무시하기 위한 최소길이 (초)
 MIN_SILENCE_DURATION = 5.0
@@ -264,19 +263,6 @@ def main():
                     "-ac", "1", "-ar", "16k", TEMP_WAV],
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-    report_progress(5, "경량 분석용 프록시 비디오(480p) 생성 중...")
-    print(" -> [프록시 생성] 경량 분석용 프록시 비디오(480p) 생성 중...")
-    subprocess.run([
-        "ffmpeg", "-y",
-        "-i", INPUT_FILE,
-        "-vf", "scale=-2:480",
-        "-c:v", "libx264",
-        "-preset", "ultrafast",
-        "-crf", "28",
-        "-an",
-        TEMP_PROXY
-    ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-
     # STEP 2. Silero VAD 로드 및 음성(대사) 구간 탐지 (EC2 CPU 로컬 실행)
 
     report_progress(8, "Silero VAD 모델 로드 및 대사 구간 탐지 중...")
@@ -294,8 +280,8 @@ def main():
     # 방금 전 FFmpeg로 만든 16kHz 임시 오디오 파일을 읽어 들임
     wav = read_audio(TEMP_WAV)
 
-    # 진폭 게이팅: -25dB 이하 소리는 무시
-    amplitude_limit = 10 ** (-25.0 / 20)
+    # 진폭 게이팅: -45dB 이하 소리는 무시
+    amplitude_limit = 10 ** (-45.0 / 20)
     wav[wav.abs() < amplitude_limit] = 0.0
 
     speech_timestamps = get_speech_timestamps(
@@ -303,7 +289,7 @@ def main():
         model,
         sampling_rate=16000,
         return_seconds=True,
-        threshold=0.9,
+        threshold=0.5,
         min_speech_duration_ms=250,
         min_silence_duration_ms=100,
     )
@@ -337,11 +323,11 @@ def main():
 
     # STEP 4. FFmpeg로 무음 구간 원본 영상에서 잘라내기 및 장면 분석
 
-    # Pass 0: 전체 비디오(프록시) 대상 글로벌 장면 전환 분석 (딱 1회)
+    # Pass 0: 전체 비디오(원본) 대상 글로벌 장면 전환 분석 (딱 1회)
     report_progress(18, "전체 비디오에서 글로벌 장면 전환 분석 중...")
     print(" -> [글로벌 분석] 전체 비디오 대상 글로벌 장면 감지 수행 중...")
     global_scene_times = detect_scene_changes(
-        TEMP_PROXY,
+        INPUT_FILE,
         threshold=SCENE_THRESHOLD,
         min_scene_duration=MIN_SCENE_DURATION,
     )
@@ -501,7 +487,7 @@ def main():
                 else:
                     window_end = end
 
-                # 비디오 슬라이싱 480p로 추출
+                # 비디오 슬라이싱 480p 온더플라이 리사이징 추출
                 # clip의 해상도는 480p로 하되, 가로세로 비율 유지.
                 # 세로를 480으로 하고, 가로는 원본 비율을 유지하도록 -2로 설정.
                 vid_out = os.path.join(OUTPUT_DIR, f"silence{clip_count:03d}_scene{scene_idx:03d}.mp4")
@@ -511,7 +497,8 @@ def main():
                     "ffmpeg", "-y",
                     "-ss", str(first_cut),
                     "-to", str(window_end),
-                    "-i", TEMP_PROXY,
+                    "-i", INPUT_FILE,
+                    "-vf", "scale=-2:480",
                     "-c:v", "libx264",
                     "-preset", "ultrafast",
                     "-an",
@@ -525,19 +512,19 @@ def main():
                     before_time = max(0.0, transition_time - 0.1)
                     after_time = transition_time + SCENE_GAP
 
-                    # 직전 프레임 추출
+                    # 직전 프레임 추출 (원본 비디오 고품질 참조)
                     img_seq += 1
                     img_before = os.path.join(OUTPUT_DIR, f"silence{clip_count:03d}_scene{scene_idx:03d}_cut{img_seq:02d}.jpg")
                     subprocess.run([
-                        "ffmpeg", "-y", "-ss", str(before_time), "-i", TEMP_PROXY,
+                        "ffmpeg", "-y", "-ss", str(before_time), "-i", INPUT_FILE,
                         "-vframes", "1", "-q:v", "2", img_before
                     ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-                    # 직후 프레임 추출
+                    # 직후 프레임 추출 (원본 비디오 고품질 참조)
                     img_seq += 1
                     img_after = os.path.join(OUTPUT_DIR, f"silence{clip_count:03d}_scene{scene_idx:03d}_cut{img_seq:02d}.jpg")
                     subprocess.run([
-                        "ffmpeg", "-y", "-ss", str(after_time), "-i", TEMP_PROXY,
+                        "ffmpeg", "-y", "-ss", str(after_time), "-i", INPUT_FILE,
                         "-vframes", "1", "-q:v", "2", img_after
                     ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
@@ -577,11 +564,9 @@ def main():
     write_silence_summary(silence_summaries)
     write_stt_summary(silence_summaries)
 
-    # 임시 오디오 및 프록시 비디오 삭제하여 용량 확보
+    # 임시 오디오 삭제하여 용량 확보
     if os.path.exists(TEMP_WAV):
         os.remove(TEMP_WAV)
-    if os.path.exists(TEMP_PROXY):
-        os.remove(TEMP_PROXY)
 
     report_progress(33, "전처리 엔진 완료")
     print("\n모든 작업이 완료되었습니다")
