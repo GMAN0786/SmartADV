@@ -71,7 +71,9 @@ public class AuthController {
             if (adminEmails != null && !adminEmails.isBlank()) {
                 String[] emails = adminEmails.split(",");
                 for (String adminEmail : emails) {
-                    if (adminEmail.trim().equalsIgnoreCase(email)) {
+                    // Strip potential double quotes injected by systemd environment file wrapping
+                    String cleanedEmail = adminEmail.trim().replace("\"", "");
+                    if (cleanedEmail.equalsIgnoreCase(email)) {
                         role = "ADMIN";
                         break;
                     }
