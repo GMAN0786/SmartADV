@@ -499,7 +499,7 @@ const NavigationRail: FunctionComponent<NavigationRailType> = ({
           </div>
         </div>
       )}
-    </div>
+    </>
   );
 };
 
