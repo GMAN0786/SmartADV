@@ -130,6 +130,10 @@ function App() {
       <Route path="/examplesmain" element={<ProtectedRoute><Main /></ProtectedRoute>} />
       <Route path="/examplesregisteration" element={<Registeration />} />
       <Route path="/exampleslogin" element={<Login />} />
+      
+      {/* Fallbacks */}
+      <Route path="/upload" element={<Navigate to="/" replace />} />
+      <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );
 }

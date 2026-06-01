@@ -28,23 +28,30 @@ public class AuthInterceptor implements HandlerInterceptor {
         if (MaintenanceController.isMaintenanceActive()) {
             String authHeader = request.getHeader("Authorization");
             boolean isAdmin = false;
-            SessionToken sessionToken = null;
+            
             if (authHeader != null && authHeader.startsWith("Bearer ")) {
                 String token = authHeader.substring(7);
-                sessionToken = sessionTokenRepository.findById(token).orElse(null);
-                if (sessionToken != null && !sessionToken.isExpired()) {
-                    User user = sessionToken.getUser();
-                    if ("ADMIN".equals(user.getRole())) {
-                        isAdmin = true;
-                        UserContext.setCurrentUser(user);
+                SessionToken sessionToken = sessionTokenRepository.findById(token).orElse(null);
+                
+                if (sessionToken == null || sessionToken.isExpired()) {
+                    if (sessionToken != null) {
+                        sessionTokenRepository.delete(sessionToken);
                     }
+                    response.setStatus(HttpStatus.UNAUTHORIZED.value());
+                    response.setContentType("application/json");
+                    response.setCharacterEncoding("UTF-8");
+                    response.getWriter().write("{\"error\": \"Unauthorized\", \"message\": \"Session expired or invalid.\"}");
+                    return false;
+                }
+                
+                User user = sessionToken.getUser();
+                if ("ADMIN".equals(user.getRole())) {
+                    isAdmin = true;
+                    UserContext.setCurrentUser(user);
                 }
             }
 
             if (!isAdmin) {
-                if (sessionToken != null && sessionToken.isExpired()) {
-                    sessionTokenRepository.delete(sessionToken);
-                }
                 response.setStatus(HttpStatus.SERVICE_UNAVAILABLE.value());
                 response.setContentType("application/json");
                 response.setCharacterEncoding("UTF-8");
