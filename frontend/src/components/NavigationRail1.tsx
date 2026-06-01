@@ -68,18 +68,26 @@ const NavigationRail1: FunctionComponent<NavigationRail1Type> = ({
   const [latestJob, setLatestJob] = useState<any>(null);
   const [isLoadingJob, setIsLoadingJob] = useState(false);
   const [clipMode, setClipMode] = useState<string>("AUTO");
+  const [imageResolution, setImageResolution] = useState<string>("LOW");
 
-  // Load clip mode from localStorage when modal opens
+  // Load clip mode and image resolution from localStorage when modal opens
   useEffect(() => {
     if (isSettingsOpen) {
       const savedMode = localStorage.getItem("smartadv_clip_mode") || "AUTO";
       setClipMode(savedMode);
+      const savedRes = localStorage.getItem("smartadv_image_resolution") || "LOW";
+      setImageResolution(savedRes);
     }
   }, [isSettingsOpen]);
 
   const handleClipModeChange = (mode: string) => {
     setClipMode(mode);
     localStorage.setItem("smartadv_clip_mode", mode);
+  };
+
+  const handleImageResolutionChange = (res: string) => {
+    setImageResolution(res);
+    localStorage.setItem("smartadv_image_resolution", res);
   };
 
   const onSettingsClick = useCallback(() => {
@@ -340,6 +348,53 @@ const NavigationRail1: FunctionComponent<NavigationRail1Type> = ({
                         />
                         <div>
                           <div className={`text-xs font-bold ${clipMode === opt.value ? "text-blue-600 dark:text-blue-400" : "text-slate-700 dark:text-slate-300"}`}>
+                            {opt.label}
+                          </div>
+                          <div className="text-[10px] text-slate-400 dark:text-slate-500 mt-0.5 leading-relaxed">
+                            {opt.desc}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Image Resolution Selection Section */}
+            {user && (
+              <div className="border-t border-slate-100 dark:border-slate-800/50 pt-4 mb-5 text-left animate-fade-in">
+                <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500 mb-3">
+                  이미지 모드 처리 화질 설정
+                </h3>
+                <div className="bg-slate-50/50 dark:bg-slate-800/20 border border-slate-100 dark:border-slate-800/30 rounded-xl p-4">
+                  <div className="text-xs text-slate-500 dark:text-slate-400 mb-3 leading-normal">
+                    이미지 기반 해설 생성 시 토큰 비용 및 환각(Hallucination) 방지를 위한 화질 수준을 설정합니다.
+                  </div>
+                  <div className="flex flex-col gap-2">
+                    {[
+                      { value: "LOW", label: "낮은 화질 (LOW)", desc: "이미지당 280 토큰만 소모하여 비용을 75% 대폭 절감하지만 세부 묘사력이 떨어질 수 있습니다." },
+                      { value: "UNSPECIFIED", label: "높은 화질 (HIGH)", desc: "이미지당 1,120 토큰을 사용하여 인물의 미세한 표정이나 화면 속 작은 글자까지 정밀하게 분석합니다." }
+                    ].map((opt) => (
+                      <div 
+                        key={opt.value}
+                        className={`flex items-start gap-3 p-2.5 rounded-lg border cursor-pointer transition-all ${
+                          imageResolution === opt.value 
+                            ? "bg-blue-50/40 dark:bg-blue-950/20 border-blue-500/20 dark:border-blue-500/10 shadow-sm" 
+                            : "border-transparent hover:bg-slate-100/30 dark:hover:bg-slate-800/20"
+                        }`}
+                        onClick={() => handleImageResolutionChange(opt.value)}
+                      >
+                        <input 
+                          type="radio" 
+                          name="imageResolution"
+                          value={opt.value}
+                          checked={imageResolution === opt.value}
+                          onChange={() => {}}
+                          className="mt-1 accent-blue-500 cursor-pointer"
+                        />
+                        <div>
+                          <div className={`text-xs font-bold ${imageResolution === opt.value ? "text-blue-600 dark:text-blue-400" : "text-slate-700 dark:text-slate-300"}`}>
                             {opt.label}
                           </div>
                           <div className="text-[10px] text-slate-400 dark:text-slate-500 mt-0.5 leading-relaxed">

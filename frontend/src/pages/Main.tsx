@@ -84,10 +84,11 @@ const Main: FunctionComponent = () => {
       }
 
       const clipMode = localStorage.getItem("smartadv_clip_mode") || "AUTO";
+      const imageResolution = localStorage.getItem("smartadv_image_resolution") || "LOW";
       const res = await fetch("/api/videos/youtube", {
         method: "POST",
         headers,
-        body: JSON.stringify({ url: raw, clipMode })
+        body: JSON.stringify({ url: raw, clipMode, imageResolution })
       });
 
       if (res.ok) {

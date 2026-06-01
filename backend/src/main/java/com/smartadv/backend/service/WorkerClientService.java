@@ -285,10 +285,13 @@ public class WorkerClientService {
         pb.environment().put("SMARTADV_OUTPUT", smartadvOutput);
         pb.environment().put("PYTHONUNBUFFERED", "1");
 
-        // Pass user setting clipMode
+        // Pass user setting clipMode and imageResolution
         AnalysisJob curJob = analysisJobRepository.findById(jobId).orElse(null);
         String clipModeVal = (curJob != null && curJob.getClipMode() != null) ? curJob.getClipMode() : "AUTO";
         pb.environment().put("SMARTADV_CLIP_MODE", clipModeVal);
+
+        String imageResVal = (curJob != null && curJob.getImageResolution() != null) ? curJob.getImageResolution() : "LOW";
+        pb.environment().put("GEMINI_IMAGE_RESOLUTION", imageResVal);
 
         // Modal 인증 토큰 전달 (modal deploy 이후 engine_backup.py에서 .remote()/.map() 호출에 필요)
         String modalTokenId = System.getenv("MODAL_TOKEN_ID");

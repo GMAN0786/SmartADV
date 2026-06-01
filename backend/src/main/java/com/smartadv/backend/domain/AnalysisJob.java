@@ -38,14 +38,18 @@ public class AnalysisJob {
     @Column(name = "clip_mode")
     private String clipMode;
 
+    @Column(name = "image_resolution")
+    private String imageResolution;
+
     @Builder
-    public AnalysisJob(Long videoId, Long userId, String clipMode) {
+    public AnalysisJob(Long videoId, Long userId, String clipMode, String imageResolution) {
         this.videoId = videoId;
         this.userId = userId;
         this.status = "PENDING";
         this.progress = 0;
         this.statusDetail = "";
         this.clipMode = clipMode != null ? clipMode : "AUTO";
+        this.imageResolution = imageResolution != null ? imageResolution : "LOW";
         this.startedAt = LocalDateTime.now();
     }
 

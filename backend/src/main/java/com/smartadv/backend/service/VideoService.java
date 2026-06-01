@@ -19,7 +19,7 @@ public class VideoService {
     private final WorkerClientService workerClientService;
 
     @Transactional
-    public Video uploadVideo(MultipartFile file, Long userId, String clipMode) {
+    public Video uploadVideo(MultipartFile file, Long userId, String clipMode, String imageResolution) {
         // 1. S3 (Mock)에 파일 업로드
         String storedUrl = storageService.uploadFile(file);
 
@@ -37,6 +37,7 @@ public class VideoService {
                 .videoId(video.getId())
                 .userId(userId)
                 .clipMode(clipMode)
+                .imageResolution(imageResolution)
                 .build();
         final AnalysisJob savedJob = analysisJobRepository.save(job);
         final Long savedVideoId = video.getId();
@@ -58,7 +59,7 @@ public class VideoService {
     }
 
     @Transactional
-    public Video uploadYoutubeVideo(String youtubeUrl, Long userId, String clipMode) {
+    public Video uploadYoutubeVideo(String youtubeUrl, Long userId, String clipMode, String imageResolution) {
         // 1. DB에 파일 정보 저장 (S3 URL 대신 유튜브 URL을 저장)
         Video video = Video.builder()
                 .originalFileName("YouTube Video")
@@ -73,6 +74,7 @@ public class VideoService {
                 .videoId(video.getId())
                 .userId(userId)
                 .clipMode(clipMode)
+                .imageResolution(imageResolution)
                 .build();
         final AnalysisJob savedJob = analysisJobRepository.save(job);
         final Long savedVideoId = video.getId();
