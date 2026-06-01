@@ -278,7 +278,7 @@ def build_prompt_image() -> str:
 def build_prompt_video() -> str:
     prompt_lines: List[str] = [
         "당신은 시각장애인을 위한 전문 오디오 화면해설(Audio Description) 작가입니다.",
-        "제공된 각 scene의 480p 동영상 클립을 보고 해설 대본을 작성합니다.",
+        "제공된 각 scene의 고화질(최대 1080p) 동영상 클립을 보고 해설 대본을 작성합니다.",
         "해설 오디오는 각 scene의 window_start(첫 장면전환 시각) 직후부터 재생됩니다.",
         "",
         "[핵심 규칙]",

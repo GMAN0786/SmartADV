@@ -491,9 +491,8 @@ def main():
                 else:
                     window_end = end
 
-                # 비디오 슬라이싱 480p 온더플라이 리사이징 추출
-                # clip의 해상도는 480p로 하되, 가로세로 비율 유지.
-                # 세로를 480으로 하고, 가로는 원본 비율을 유지하도록 -2로 설정.
+                # 비디오 슬라이싱 최대 1080p 고화질 온더플라이 리사이징 추출
+                # 원본 세로 해상도가 1080보다 크면 1080p로 리사이징하고, 작으면 원본 비율을 유지하도록 -2:min(1080,ih) 필터 사용.
                 vid_out = os.path.join(OUTPUT_DIR, f"silence{clip_count:03d}_scene{scene_idx:03d}.mp4")
                 print(f"   -> scene{scene_idx:03d} 비디오 추출 중 ({first_cut:.2f}초 ~ {window_end:.2f}초, 길이: {window_end - first_cut:.2f}초) -> {vid_out}")
                 
@@ -502,7 +501,7 @@ def main():
                     "-ss", str(first_cut),
                     "-to", str(window_end),
                     "-i", INPUT_FILE,
-                    "-vf", "scale=-2:480",
+                    "-vf", "scale=-2:min(1080\\,ih)",
                     "-c:v", "libx264",
                     "-preset", "ultrafast",
                     "-an",
