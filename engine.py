@@ -41,11 +41,11 @@ TEMP_WAV = os.path.join(OUTPUT_DIR, "temp_16k.wav")
 MIN_SILENCE_DURATION = 5.0
 
 # 장면 전환(카메라 컷) 감지 민감도 (기본 0.3)
-SCENE_THRESHOLD = 0.25
+SCENE_THRESHOLD = 0.30
 
 # 장면 캡처시 캡처 간격 설정
 SCENE_GAP = 1.0
-MIN_SCENE_DURATION = 3.0
+MIN_SCENE_DURATION = 4.5
 
 # 장면전환 간격이 이보다 짧으면 하나의 scene으로 묶음 (초)
 MIN_CUT_WINDOW = 5.0
@@ -234,10 +234,18 @@ def main():
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     os.makedirs(CONTEXT_AUDIO_DIR, exist_ok=True)
 
-    # 이전 실행의 scene 이미지 정리
+    # 이전 실행의 scene 이미지, 비디오 클립 및 모드 파일 정리
     for old_img in glob.glob(os.path.join(OUTPUT_DIR, "silence*_scene*_cut*.jpg")):
-        os.remove(old_img)
-    print("[정리] 이전 scene 이미지 삭제 완료")
+        try: os.remove(old_img)
+        except: pass
+    for old_vid in glob.glob(os.path.join(OUTPUT_DIR, "silence*_scene*.mp4")):
+        try: os.remove(old_vid)
+        except: pass
+    old_mode = os.path.join(OUTPUT_DIR, "llm_mode.txt")
+    if os.path.exists(old_mode):
+        try: os.remove(old_mode)
+        except: pass
+    print("[정리] 이전 scene 이미지, 비디오 클립 및 모드 파일 삭제 완료")
 
     # Modal GPU 워커 참조 (STT 전용)
     # modal deploy modal_workers.py 로 배포한 함수를 이름으로 조회합니다.
@@ -321,6 +329,7 @@ def main():
     clip_count = 0
     silence_summaries = []
 
+    # Pass 1: 무음 구간 오디오 추출 및 장면 전환 분석
     for silence in silence_timestamps:
         start = silence['start']
         end = silence['end']
@@ -331,7 +340,7 @@ def main():
             continue
 
         clip_count += 1
-        print(f"\n무음구간 {clip_count:03d} 처리 중... (구간: {start:.2f}초 ~ {end:.2f}초, 길이: {duration:.2f}초)")
+        print(f"\n무음구간 {clip_count:03d} 분석 중... (구간: {start:.2f}초 ~ {end:.2f}초, 길이: {duration:.2f}초)")
 
         # 무음구간 전후 15초 구간 음원 추출 로직 (before / after 분리)
         before_start = max(0.0, start - CONTEXT_WINDOW)
@@ -404,10 +413,84 @@ def main():
             'after_time_offset': after_start if after_duration > 0 else None,
         })
 
-        if scenes:
-            total_transitions = sum(len(s) for s in scenes)
-            print(f"   -> {total_transitions}번의 장면 전환 → {len(scenes)}개 scene으로 분류. 프레임 이미지 추출 시작...")
+    # 모드 결정 및 토큰 계산
+    total_images = 0
+    total_video_duration = 0.0
 
+    for summary in silence_summaries:
+        scenes = summary.get('scenes', [])
+        for i, scene_transitions in enumerate(scenes):
+            total_images += len(scene_transitions) * 2  # 컷당 2개의 이미지
+            
+            first_cut = scene_transitions[0]
+            if i + 1 < len(scenes):
+                window_end = scenes[i + 1][0]
+            else:
+                window_end = summary['end']
+            
+            total_video_duration += (window_end - first_cut)
+
+    # 토큰 비용 계산
+    image_tokens = total_images * 1120
+    video_tokens = total_video_duration * 140  # 2fps * 70 tokens/frame = 140 tokens/sec
+
+    print(f"\n[비용 분석]")
+    print(f" - 총 이미지 예상 수: {total_images} 장 (예상 토큰: {image_tokens:,})")
+    print(f" - 총 비디오 예상 재생 시간: {total_video_duration:.2f} 초 (예상 토큰: {video_tokens:,.0f})")
+
+    if total_images > 0 and image_tokens > video_tokens:
+        llm_mode = "VIDEO"
+        print(f" -> 이미지 비용({image_tokens:,} 토큰)이 비디오 비용({video_tokens:,.0f} 토큰)보다 비싸므로 VIDEO 모드로 전환합니다.")
+    else:
+        llm_mode = "IMAGE"
+        print(f" -> 이미지 비용({image_tokens:,} 토큰)이 더 효율적이거나 비디오가 필요 없으므로 IMAGE 모드를 유지합니다.")
+
+    # llm_mode.txt 에 저장
+    mode_file = os.path.join(OUTPUT_DIR, "llm_mode.txt")
+    with open(mode_file, "w", encoding="utf-8") as f:
+        f.write(llm_mode)
+    print(f" -> 작동 모드 저장 완료: {mode_file} -> {llm_mode}")
+
+    # Pass 2: 미디어(이미지 혹은 비디오 클립) 추출
+    for summary in silence_summaries:
+        clip_count = summary['index']
+        scenes = summary.get('scenes', [])
+        start = summary['start']
+        end = summary['end']
+
+        if not scenes:
+            print(f"\n무음구간 {clip_count:03d}: 장면 전환 없음.")
+            continue
+
+        total_transitions = sum(len(s) for s in scenes)
+        
+        if llm_mode == "VIDEO":
+            print(f"\n무음구간 {clip_count:03d}: {total_transitions}번의 장면 전환 → {len(scenes)}개 scene 비디오 추출 시작...")
+            for scene_idx, scene_transitions in enumerate(scenes, start=1):
+                first_cut = scene_transitions[0]
+                if scene_idx < len(scenes):
+                    window_end = scenes[scene_idx][0]
+                else:
+                    window_end = end
+
+                # 비디오 슬라이싱 480p로 추출
+                # clip의 해상도는 480p로 하되, 가로세로 비율 유지.
+                # 세로를 480으로 하고, 가로는 원본 비율을 유지하도록 -2로 설정.
+                vid_out = os.path.join(OUTPUT_DIR, f"silence{clip_count:03d}_scene{scene_idx:03d}.mp4")
+                print(f"   -> scene{scene_idx:03d} 비디오 추출 중 ({first_cut:.2f}초 ~ {window_end:.2f}초, 길이: {window_end - first_cut:.2f}초) -> {vid_out}")
+                
+                subprocess.run([
+                    "ffmpeg", "-y",
+                    "-ss", str(first_cut),
+                    "-to", str(window_end),
+                    "-i", INPUT_FILE,
+                    "-vf", "scale=-2:480",
+                    "-c:v", "libx264",
+                    "-an",
+                    vid_out
+                ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        else:
+            print(f"\n무음구간 {clip_count:03d}: {total_transitions}번의 장면 전환 → {len(scenes)}개 scene 이미지 추출 시작...")
             for scene_idx, scene_transitions in enumerate(scenes, start=1):
                 img_seq = 0
                 for transition_time in scene_transitions:
@@ -429,8 +512,6 @@ def main():
                         "ffmpeg", "-y", "-ss", str(after_time), "-i", INPUT_FILE,
                         "-vframes", "1", "-q:v", "2", img_after
                     ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        else:
-            print(f"   -> 장면 전환 없음.")
 
     # STEP 5. Modal GPU — 모든 context audio 클립 병렬 STT
 

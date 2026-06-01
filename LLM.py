@@ -41,6 +41,14 @@ GEMINI_MAX_RETRIES = int(os.getenv("GEMINI_MAX_RETRIES", "5"))
 TTS_SYLLABLES_PER_SECOND = 4   # TTS 초당 발화 음절 수
 TTS_MARGIN_SECONDS = 0.5        # 해설 분량 계산 시 여유 시간 (초)
 
+# llm_mode.txt에서 작동 모드 읽기
+LLM_MODE_PATH = OUTPUT_DIR / "llm_mode.txt"
+if LLM_MODE_PATH.exists():
+    LLM_MODE = LLM_MODE_PATH.read_text(encoding="utf-8").strip()
+else:
+    LLM_MODE = "IMAGE"
+print(f"[설정] llm_mode: {LLM_MODE}")
+
 
 # ===== 데이터 구조 =====
 @dataclass
@@ -51,6 +59,7 @@ class SceneInfo:
     window_end_abs: float                   # 다음 scene의 첫 장면전환 또는 silence 끝
     window_duration: float                  # window_end_abs - window_start_abs
     images: List[Path] = field(default_factory=list)   # 시간순 키프레임 이미지
+    video_path: Optional[Path] = None                 # 비디오 클립 경로 (VIDEO 모드용)
 
 
 @dataclass
@@ -187,37 +196,57 @@ def parse_stt_summary(path: Path, silences: Dict[int, SilenceInfo]) -> None:
     print(f"[입력] 전 대사 {total_before}개, 후 대사 {total_after}개 로드 완료")
 
 
-def collect_scene_images(silences: Dict[int, SilenceInfo], image_dir: Path) -> None:
-    """silence{NNN}_scene{NNN}_cut{NN}.jpg 파일을 각 SceneInfo에 연결합니다."""
-    image_re = re.compile(
-        r"silence(\d{3})_scene(\d{3})_cut(\d{2})\.(jpg|jpeg|png|webp)$", re.IGNORECASE
-    )
-    image_map: Dict[Tuple[int, int], List[Tuple[int, Path]]] = {}
-    count = 0
+def collect_scene_media(silences: Dict[int, SilenceInfo], output_dir: Path, mode: str) -> None:
+    """모드에 따라 .jpg 키프레임 이미지 또는 .mp4 비디오 클립 파일을 각 SceneInfo에 연결합니다."""
+    if mode == "VIDEO":
+        video_re = re.compile(
+            r"silence(\d{3})_scene(\d{3})\.(mp4)$", re.IGNORECASE
+        )
+        count = 0
+        for file_path in output_dir.iterdir():
+            if not file_path.is_file() or file_path.suffix.lower() != ".mp4":
+                continue
+            match = video_re.match(file_path.name)
+            if not match:
+                continue
+            silence_id = int(match.group(1))
+            scene_id = int(match.group(2))
+            if silence_id in silences:
+                for scene in silences[silence_id].scenes:
+                    if scene.scene_id == scene_id:
+                        scene.video_path = file_path
+                        count += 1
+        print(f"[입력] 비디오 클립 {count}개 로드 완료")
+    else:
+        image_re = re.compile(
+            r"silence(\d{3})_scene(\d{3})_cut(\d{2})\.(jpg|jpeg|png|webp)$", re.IGNORECASE
+        )
+        image_map: Dict[Tuple[int, int], List[Tuple[int, Path]]] = {}
+        count = 0
 
-    for file_path in image_dir.iterdir():
-        if not file_path.is_file() or file_path.suffix.lower() not in CONTEXT_IMAGE_EXTENSIONS:
-            continue
-        match = image_re.match(file_path.name)
-        if not match:
-            continue
-        silence_id = int(match.group(1))
-        scene_id = int(match.group(2))
-        cut_num = int(match.group(3))
-        image_map.setdefault((silence_id, scene_id), []).append((cut_num, file_path))
-        count += 1
+        for file_path in output_dir.iterdir():
+            if not file_path.is_file() or file_path.suffix.lower() not in CONTEXT_IMAGE_EXTENSIONS:
+                continue
+            match = image_re.match(file_path.name)
+            if not match:
+                continue
+            silence_id = int(match.group(1))
+            scene_id = int(match.group(2))
+            cut_num = int(match.group(3))
+            image_map.setdefault((silence_id, scene_id), []).append((cut_num, file_path))
+            count += 1
 
-    for silence in silences.values():
-        for scene in silence.scenes:
-            key = (silence.silence_id, scene.scene_id)
-            if key in image_map:
-                sorted_images = sorted(image_map[key], key=lambda x: x[0])
-                scene.images = [path for _, path in sorted_images]
+        for silence in silences.values():
+            for scene in silence.scenes:
+                key = (silence.silence_id, scene.scene_id)
+                if key in image_map:
+                    sorted_images = sorted(image_map[key], key=lambda x: x[0])
+                    scene.images = [path for _, path in sorted_images]
 
-    print(f"[입력] 키프레임 이미지 {count}개 로드 완료")
+        print(f"[입력] 키프레임 이미지 {count}개 로드 완료")
 
 
-def build_prompt(silences: Dict[int, SilenceInfo]) -> str:
+def build_prompt_image(silences: Dict[int, SilenceInfo]) -> str:
     prompt_lines: List[str] = []
     prompt_lines.extend([
         "당신은 시각장애인을 위한 전문 오디오 화면해설(Audio Description) 작가입니다.",
@@ -288,42 +317,135 @@ def build_prompt(silences: Dict[int, SilenceInfo]) -> str:
     return prompt
 
 
-def build_multimodal_contents(prompt: str, silences: Dict[int, SilenceInfo], client) -> Tuple[List[object], List[str]]:
-    """프롬프트 텍스트 뒤에 scene별로 [scene 라벨 텍스트 → 해당 이미지들]을 교차 배치합니다.
-    이렇게 하면 Gemini가 어떤 이미지가 어떤 scene에 속하는지 정확히 알 수 있습니다."""
+def build_prompt_video(silences: Dict[int, SilenceInfo]) -> str:
+    prompt_lines: List[str] = []
+    prompt_lines.extend([
+        "당신은 시각장애인을 위한 전문 오디오 화면해설(Audio Description) 작가입니다.",
+        "각 scene의 480p 동영상 클립을 보고 해설 대본을 작성합니다.",
+        "해설 오디오는 각 scene의 window_start(첫 장면전환 시각) 직후부터 재생됩니다.",
+        "",
+        "[핵심 규칙]",
+        "1. 제공된 동영상 클립을 시청하고, 해당 scene 내의 장면 변화 및 인물의 행동을 파악하여 해설을 작성합니다.",
+        "2. 전후 대사는 행동 추론 참고용으로만 사용하고, 출력 문장에 직접 쓰지 않습니다.",
+        "3. 감정 해석, 소리 묘사, 추측성 표현은 금지합니다.",
+        f"4. TTS 발화 속도는 초당 약 {TTS_SYLLABLES_PER_SECOND}음절입니다.",
+        f"   window_duration에서 {TTS_MARGIN_SECONDS}초를 뺀 시간 안에 읽힐 분량으로 작성합니다.",
+        "   (예: window 8.0초 → 최대 약 30음절 / window 5.0초 → 최대 약 18음절)",
+        "5. 출력은 반드시 CSV만 반환합니다. 코드블록, 설명문, 마크다운을 절대 추가하지 않습니다.",
+        "",
+        "[출력 CSV 스키마]",
+        "silence_id,scene_id,window_start,window_end,text",
+        "- scene_id: 해당 silence 내 scene 번호 (숫자만, 예: 1, 2, 3)",
+        "- window_start: scene의 첫 장면전환 시각 (HH:MM:SS:mmm)",
+        "- window_end: 다음 scene의 첫 장면전환 시각 또는 silence 끝 (HH:MM:SS:mmm)",
+        "- text: TTS에 바로 넣을 수 있는 평어체 한 문장 또는 두 문장",
+        "",
+        "[입력 데이터]",
+    ])
+
+    for silence_id in sorted(silences):
+        silence = silences[silence_id]
+        prompt_lines.append(f"## silence{silence.silence_id:03d}")
+        prompt_lines.append(
+            f"구간: {seconds_to_hhmmss(silence.start_seconds)} ~ {seconds_to_hhmmss(silence.end_seconds)}"
+        )
+
+        if silence.context_before_lines:
+            prompt_lines.append("[전 대사]")
+            prompt_lines.extend(silence.context_before_lines)
+        else:
+            prompt_lines.append("[전 대사]\n대사 없음")
+
+        if silence.context_after_lines:
+            prompt_lines.append("[후 대사]")
+            prompt_lines.extend(silence.context_after_lines)
+        else:
+            prompt_lines.append("[후 대사]\n대사 없음")
+
+        if not silence.scenes:
+            prompt_lines.append("[장면전환 없음 — 해설 불필요]")
+        else:
+            prompt_lines.append("[scene 목록]")
+            for scene in silence.scenes:
+                max_narration_sec = max(0.0, scene.window_duration - TTS_MARGIN_SECONDS)
+                max_syllables = int(max_narration_sec * TTS_SYLLABLES_PER_SECOND)
+                prompt_lines.append(
+                    f"- scene{scene.scene_id:03d}: "
+                    f"window={seconds_to_hhmmss(scene.window_start_abs)}~{seconds_to_hhmmss(scene.window_end_abs)}, "
+                    f"window_duration={scene.window_duration:.3f}s, "
+                    f"동영상 클립: {scene.video_path.name if scene.video_path else 'None'}, "
+                    f"최대음절={max_syllables}자"
+                )
+        prompt_lines.append("")
+
+    prompt_lines.append("반드시 CSV 헤더부터 출력하십시오.")
+    prompt = "\n".join(prompt_lines)
+    print(f"[프롬프트] 생성 완료: {len(prompt)}자")
+    return prompt
+
+
+def build_multimodal_contents(prompt: str, silences: Dict[int, SilenceInfo], client, mode: str) -> Tuple[List[object], List[str]]:
+    """프롬프트 텍스트 뒤에 scene별로 [scene 라벨 텍스트 → 해당 이미지 또는 동영상]을 교차 배치합니다."""
     contents: List[object] = [prompt]
     uploaded_file_names: List[str] = []
 
-    # 총 이미지 수 미리 계산 (진행률 표시용)
-    total_images = sum(
-        1 for silence in silences.values()
-        for scene in silence.scenes
-        for img_path in scene.images if img_path.exists()
-    )
-    print(f"[프롬프트] Files API 업로드 시작: 총 이미지 {total_images}개")
-    report_progress(45, f"Gemini에 키프레임 이미지 {total_images}장 업로드 시작...")
+    if mode == "VIDEO":
+        total_videos = sum(
+            1 for silence in silences.values()
+            for scene in silence.scenes
+            if scene.video_path and scene.video_path.exists()
+        )
+        print(f"[프롬프트] Files API 업로드 시작: 총 비디오 {total_videos}개")
+        report_progress(45, f"Gemini에 비디오 클립 {total_videos}개 업로드 시작...")
 
-    img_idx = 0
-    for silence_id in sorted(silences):
-        silence = silences[silence_id]
-        for scene in silence.scenes:
-            existing_images = [p for p in scene.images if p.exists()]
-            if not existing_images:
-                continue
-            # scene 라벨을 텍스트로 삽입하여 이미지 구분
-            contents.append(f"[silence{silence.silence_id:03d} scene{scene.scene_id:03d} 이미지]")
-            for image_path in existing_images:
-                img_idx += 1
-                upload_pct = 45 + int((img_idx / total_images) * 13) if total_images > 0 else 45
-                report_progress(upload_pct, f"이미지 업로드 중 ({img_idx}/{total_images}): {image_path.name}")
-                print(f"[Files API] 업로드 중 ({img_idx}/{total_images}): {image_path.name}")
-                uploaded_file = upload_gemini_file(client, image_path)
+        vid_idx = 0
+        for silence_id in sorted(silences):
+            silence = silences[silence_id]
+            for scene in silence.scenes:
+                if not scene.video_path or not scene.video_path.exists():
+                    continue
+                contents.append(f"[silence{silence.silence_id:03d} scene{scene.scene_id:03d} 동영상]")
+                vid_idx += 1
+                upload_pct = 45 + int((vid_idx / total_videos) * 13) if total_videos > 0 else 45
+                report_progress(upload_pct, f"비디오 업로드 중 ({vid_idx}/{total_videos}): {scene.video_path.name}")
+                print(f"[Files API] 업로드 중 ({vid_idx}/{total_videos}): {scene.video_path.name}")
+                uploaded_file = upload_gemini_file(client, scene.video_path)
                 contents.append(uploaded_file)
                 uploaded_file_names.append(uploaded_file.name)
-                print(f"[Files API] 업로드 완료 ({img_idx}/{total_images}): {image_path.name} -> {uploaded_file.name}")
+                print(f"[Files API] 업로드 완료 ({vid_idx}/{total_videos}): {scene.video_path.name} -> {uploaded_file.name}")
+        
+        report_progress(58, "비디오 업로드 완료! Gemini AI 응답 대기 중...")
+        print(f"[프롬프트] Files API 업로드 완료: scene별 교차 배치, 원격 비디오 {total_videos}개")
+    else:
+        total_images = sum(
+            1 for silence in silences.values()
+            for scene in silence.scenes
+            for img_path in scene.images if img_path.exists()
+        )
+        print(f"[프롬프트] Files API 업로드 시작: 총 이미지 {total_images}개")
+        report_progress(45, f"Gemini에 키프레임 이미지 {total_images}장 업로드 시작...")
 
-    report_progress(58, "이미지 업로드 완료! Gemini AI 응답 대기 중...")
-    print(f"[프롬프트] Files API 업로드 완료: scene별 교차 배치, 원격 이미지 {total_images}개")
+        img_idx = 0
+        for silence_id in sorted(silences):
+            silence = silences[silence_id]
+            for scene in silence.scenes:
+                existing_images = [p for p in scene.images if p.exists()]
+                if not existing_images:
+                    continue
+                contents.append(f"[silence{silence.silence_id:03d} scene{scene.scene_id:03d} 이미지]")
+                for image_path in existing_images:
+                    img_idx += 1
+                    upload_pct = 45 + int((img_idx / total_images) * 13) if total_images > 0 else 45
+                    report_progress(upload_pct, f"이미지 업로드 중 ({img_idx}/{total_images}): {image_path.name}")
+                    print(f"[Files API] 업로드 중 ({img_idx}/{total_images}): {image_path.name}")
+                    uploaded_file = upload_gemini_file(client, image_path)
+                    contents.append(uploaded_file)
+                    uploaded_file_names.append(uploaded_file.name)
+                    print(f"[Files API] 업로드 완료 ({img_idx}/{total_images}): {image_path.name} -> {uploaded_file.name}")
+
+        report_progress(58, "이미지 업로드 완료! Gemini AI 응답 대기 중...")
+        print(f"[프롬프트] Files API 업로드 완료: scene별 교차 배치, 원격 이미지 {total_images}개")
+
     return contents, uploaded_file_names
 
 
@@ -462,14 +584,14 @@ def cleanup_gemini_files(client) -> None:
         print(f"[Gemini] Files API 목록 조회/정리 실패: {exc}")
 
 
-def call_gemini(prompt: str, silences: Dict[int, SilenceInfo]) -> str:
+def call_gemini(prompt: str, silences: Dict[int, SilenceInfo], mode: str) -> str:
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
         raise EnvironmentError("GEMINI_API_KEY 환경변수가 설정되어 있지 않습니다.")
 
     client = genai.Client(api_key=api_key)
     cleanup_gemini_files(client)
-    contents, uploaded_file_names = build_multimodal_contents(prompt, silences, client)
+    contents, uploaded_file_names = build_multimodal_contents(prompt, silences, client, mode)
 
     max_retries = GEMINI_MAX_RETRIES
     last_error = None
@@ -496,6 +618,17 @@ def call_gemini(prompt: str, silences: Dict[int, SilenceInfo]) -> str:
                         raise TimeoutError(f"Gemini API 응답 {GEMINI_TIMEOUT_SECONDS}초 타임아웃 (503 UNAVAILABLE)")
 
                 print("[Gemini] 응답 수신 완료")
+                try:
+                    if hasattr(response, "usage_metadata") and response.usage_metadata is not None:
+                        prompt_tokens = response.usage_metadata.prompt_token_count
+                        completion_tokens = response.usage_metadata.candidates_token_count
+                        total_tokens = response.usage_metadata.total_token_count
+                        token_usage_path = OUTPUT_DIR / "token_usage.txt"
+                        token_usage_path.write_text(f"{prompt_tokens},{completion_tokens},{total_tokens}", encoding="utf-8")
+                        print(f"[Gemini] 토큰 사용량 저장 완료: 입력={prompt_tokens}, 출력={completion_tokens}, 합계={total_tokens}")
+                except Exception as exc:
+                    print(f"[Gemini] 토큰 사용량 추출/저장 실패: {exc}")
+
                 if not response.text:
                     raise ValueError("Gemini 응답 텍스트가 비어 있습니다.")
                 return response.text
@@ -519,14 +652,18 @@ def call_gemini(prompt: str, silences: Dict[int, SilenceInfo]) -> str:
         delete_uploaded_gemini_files(client, uploaded_file_names)
 
 
-def load_all_inputs() -> Dict[int, SilenceInfo]:
+def load_all_inputs(mode: str) -> Dict[int, SilenceInfo]:
     print("[1/4] 입력 파일 파싱 시작")
     silences = parse_silence_summary(SILENCE_SUMMARY_PATH)
     parse_stt_summary(STT_SUMMARY_PATH, silences)
-    collect_scene_images(silences, OUTPUT_DIR)
+    collect_scene_media(silences, OUTPUT_DIR, mode)
     total_scenes = sum(len(s.scenes) for s in silences.values())
-    total_images = sum(len(scene.images) for s in silences.values() for scene in s.scenes)
-    print(f"[1/4] 입력 파일 파싱 완료: 총 scene {total_scenes}개, 이미지 {total_images}개")
+    if mode == "VIDEO":
+        total_videos = sum(1 for s in silences.values() for scene in s.scenes if scene.video_path)
+        print(f"[1/4] 입력 파일 파싱 완료: 총 scene {total_scenes}개, 비디오 클립 {total_videos}개")
+    else:
+        total_images = sum(len(scene.images) for s in silences.values() for scene in s.scenes)
+        print(f"[1/4] 입력 파일 파싱 완료: 총 scene {total_scenes}개, 이미지 {total_images}개")
     return silences
 
 
@@ -534,19 +671,22 @@ def main() -> None:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     report_progress(35, "전처리 결과 파일 파싱 중...")
-    silences = load_all_inputs()
+    silences = load_all_inputs(LLM_MODE)
     print(f"[2/4] 무음구간 데이터 준비 완료: {len(silences)}개")
     if not silences:
         raise ValueError("처리할 무음구간 데이터가 없습니다.")
 
     report_progress(40, "Gemini 프롬프트 구성 중...")
     print("[3/4] Gemini 프롬프트 생성 시작")
-    prompt = build_prompt(silences)
+    if LLM_MODE == "VIDEO":
+        prompt = build_prompt_video(silences)
+    else:
+        prompt = build_prompt_image(silences)
     print("[3/4] Gemini 프롬프트 생성 완료")
 
     report_progress(45, "Gemini AI에 해설 대본 요청 중... (최대 수 분 소요)")
     print("[4/4] Gemini 호출 시작")
-    raw_response = call_gemini(prompt, silences)
+    raw_response = call_gemini(prompt, silences, LLM_MODE)
     print(f"[4/4] Gemini 호출 완료: 응답 {len(raw_response)}자")
 
     report_progress(60, "AI 응답 후처리 및 대본 저장 중...")
