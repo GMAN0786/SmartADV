@@ -315,9 +315,9 @@ def build_prompt_video() -> str:
     return "\n".join(prompt_lines)
 
 
-def split_silences_into_batches(silences: Dict[int, SilenceInfo], max_scenes_per_batch: int = 10) -> List[Dict[int, SilenceInfo]]:
+def split_silences_into_batches(silences: Dict[int, SilenceInfo], max_scenes_per_batch: int = 7) -> List[Dict[int, SilenceInfo]]:
     """무음구간(Silence)의 문맥 응집성을 극대화하기 위해 Silence 단위를 쪼개지 않고 배치로 묶습니다.
-    단, 단일 Silence 내 Scene 개수가 10개를 초과할 때만 가상 분할하여 전후 대사 맥락을 보존 주입합니다."""
+    단, 단일 Silence 내 Scene 개수가 7개를 초과할 때만 가상 분할하여 전후 대사 맥락을 보존 주입합니다."""
     batches = []
     current_batch = {}
     current_scenes_count = 0
@@ -913,9 +913,9 @@ def main() -> None:
     report_progress(40, "LLM 호출을 위한 프로비저닝 처리 중...")
     print("[3/4] Gemini 프롬프트 구성 및 문맥 흐름 보존형 배칭 분할 시작")
     
-    # VIDEO/IMAGE 모드 모두 최대 10개 Scene 단위 병렬 배치 분할 실행
-    batches = split_silences_into_batches(silences, max_scenes_per_batch=10)
-    print(f" -> 문맥 보존 배칭 완수: 총 {len(silences)}개 무음구간을 {len(batches)}개 배치로 분할함 (배치당 최대 10개 Scene)")
+    # VIDEO/IMAGE 모드 모두 최대 7개 Scene 단위 병렬 배치 분할 실행
+    batches = split_silences_into_batches(silences, max_scenes_per_batch=7)
+    print(f" -> 문맥 보존 배칭 완수: 총 {len(silences)}개 무음구간을 {len(batches)}개 배치로 분할함 (배치당 최대 7개 Scene)")
 
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
