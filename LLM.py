@@ -700,6 +700,95 @@ def cleanup_gemini_files(client) -> None:
         print(f"[Gemini] Files API 일괄 정리 실패: {exc}")
 
 
+def align_and_correct_csv(csv_text: str, batch_silences: Dict[int, SilenceInfo]) -> str:
+    """Gemini가 출력한 CSV 응답의 타임스탬프와 ID 할루시네이션을
+    원본 데이터 구조(batch_silences)의 정확한 값으로 강제 교정 및 정렬합니다.
+    """
+    # 1. 원본 데이터 구조에서 이 배치에 포함된 모든 Scene 정보를 순서대로 수집합니다.
+    expected_scenes = []
+    for silence_id in sorted(batch_silences):
+        silence = batch_silences[silence_id]
+        for scene in silence.scenes:
+            expected_scenes.append({
+                "silence_id": silence_id,
+                "scene_id": scene.scene_id,
+                "window_start": seconds_to_hhmmss(scene.window_start_abs),
+                "window_end": seconds_to_hhmmss(scene.window_end_abs),
+                "matched": False
+            })
+
+    if not expected_scenes:
+        return ""
+
+    # 2. Gemini가 반환한 CSV 파싱
+    cleaned = strip_code_fence(csv_text)
+    parsed_rows = []
+    try:
+        rows = list(csv.reader(io.StringIO(cleaned)))
+        if rows:
+            expected_header = ["silence_id", "scene_id", "window_start", "window_end", "text"]
+            header = [cell.strip() for cell in rows[0]]
+            start_idx = 1
+            if header != expected_header:
+                if len(header) >= 5 and header[0].strip().lower() in ("silence_id", "silenceid", "silence"):
+                    start_idx = 1
+                else:
+                    start_idx = 0
+            
+            for row in rows[start_idx:]:
+                if not row or all(not cell.strip() for cell in row):
+                    continue
+                parsed_rows.append(row)
+    except Exception as e:
+        print(f"[Warning] Gemini 응답 CSV 파싱 오류: {e}")
+
+    # 3. 매핑 수행 (우선순위 1: Key 매핑, 우선순위 2: 순서 매핑)
+    corrected_rows = []
+    
+    # 각 expected_scene에 대해 매칭될 text를 찾습니다.
+    for i, exp in enumerate(expected_scenes):
+        matched_text = ""
+        
+        # 1단계: Key (silence_id, scene_id)로 매핑 시도
+        for row in parsed_rows:
+            if len(row) >= 5:
+                try:
+                    p_sil_id = int(re.sub(r'\D', '', row[0]))
+                    p_sce_id = int(re.sub(r'\D', '', row[1]))
+                    if p_sil_id == exp["silence_id"] and p_sce_id == exp["scene_id"]:
+                        matched_text = row[4].strip()
+                        exp["matched"] = True
+                        break
+                except ValueError:
+                    continue
+        
+        # 2단계: Key 매핑이 실패한 경우, 순서(index) 매핑 시도
+        if not matched_text and i < len(parsed_rows):
+            row = parsed_rows[i]
+            if len(row) > 0:
+                matched_text = row[-1].strip() # 마지막 컬럼인 text
+                exp["matched"] = True
+
+        # 만약 매칭된 텍스트가 없으면 최소한의 처리 또는 스킵 (혹은 Gemini 텍스트 직접 사용)
+        if matched_text:
+            corrected_rows.append([
+                str(exp["silence_id"]),
+                str(exp["scene_id"]),
+                exp["window_start"],
+                exp["window_end"],
+                matched_text
+            ])
+
+    # 4. 정정된 결과를 깨끗한 CSV 형식 문자열로 만들어 반환합니다.
+    output = io.StringIO()
+    writer = csv.writer(output, lineterminator="\n")
+    writer.writerow(["silence_id", "scene_id", "window_start", "window_end", "text"])
+    for row in corrected_rows:
+        writer.writerow(row)
+        
+    return output.getvalue().strip() + "\n"
+
+
 def call_gemini_for_batch(client, prompt: str, silences: Dict[int, SilenceInfo], mode: str, batch_num: int, total_batches: int) -> Tuple[str, int, int, int]:
     """개별 스레드 배치를 위해 Gemini API를 안전하게 실행하고 토큰 정보를 반환합니다."""
     contents, uploaded_file_names = build_multimodal_contents_for_batch(prompt, silences, client, mode, batch_num, total_batches)
@@ -742,7 +831,10 @@ def call_gemini_for_batch(client, prompt: str, silences: Dict[int, SilenceInfo],
 
                 if not response.text:
                     raise ValueError(f"Gemini Batch {batch_num} 응답 텍스트 공백 오류")
-                return response.text, prompt_tokens, completion_tokens, total_tokens
+                
+                # 타임스탬프 및 ID 할루시네이션 완벽 정정 및 보장
+                corrected_csv = align_and_correct_csv(response.text, silences)
+                return corrected_csv, prompt_tokens, completion_tokens, total_tokens
 
             except Exception as e:
                 last_error = e
@@ -780,13 +872,13 @@ def load_all_inputs(mode: str) -> Dict[int, SilenceInfo]:
 def main() -> None:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    report_progress(35, "전처리 결과 파일 파싱 중...")
+    report_progress(35, "전처리 결과를 불러오는 중...")
     silences = load_all_inputs(LLM_MODE)
     print(f"[2/4] 무음구간 데이터 준비 완료: {len(silences)}개")
     if not silences:
         raise ValueError("처리할 무음구간 데이터가 없습니다.")
 
-    report_progress(40, "Gemini 프롬프트 구성 및 배칭 처리 중...")
+    report_progress(40, "LLM 호출을 위한 프로비저닝 처리 중...")
     print("[3/4] Gemini 프롬프트 구성 및 문맥 흐름 보존형 배칭 분할 시작")
     
     # VIDEO/IMAGE 모드 모두 최대 10개 Scene 단위 병렬 배치 분할 실행
@@ -808,7 +900,7 @@ def main() -> None:
     total_overall_tokens = 0
 
     print(f"[4/4] Gemini 호출 시작: 총 {len(batches)}개 배치를 병렬(ThreadPool)로 전송합니다.")
-    report_progress(45, f"Gemini AI에 병렬로 해설 대본 요청 중... (총 {len(batches)}개 배치)")
+    report_progress(45, f"Gemini AI에 해설 대본 요청 중... (총 {len(batches)}개의 쓰레드로 분할하여 요청합니다)")
 
     def process_batch_worker(batch_idx: int, batch_silences: Dict[int, SilenceInfo]):
         if LLM_MODE == "VIDEO":
@@ -849,7 +941,7 @@ def main() -> None:
     except Exception as exc:
         print(f"[Gemini] 합산 토큰 기록 실패: {exc}")
 
-    report_progress(60, "AI 응답 통합 병합 및 대본 저장 중...")
+    report_progress(60, "AI 응답 종합 중...")
     
     # 2. 수신된 모든 스레드 결과를 하나로 정교하게 병합 및 정규화
     merged_csv = merge_csv_results([r for r in batch_results if r])
