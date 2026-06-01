@@ -135,7 +135,7 @@ const NavigationRail1: FunctionComponent<NavigationRail1Type> = ({
   return (
     <>
       <div
-        className={`min-h-screen w-[72px] overflow-hidden shrink-0 flex flex-col items-center pt-11 px-0 pb-14 box-border gap-[78px] text-center text-static-label-medium-size text-schemes-secondary font-[Roboto] mq750:pt-[29px] mq750:pb-9 mq750:box-border ${className}`}
+        className={`min-h-screen w-[72px] overflow-hidden shrink-0 flex flex-col items-center pt-11 px-0 pb-14 box-border gap-[78px] text-center text-static-label-medium-size text-schemes-secondary font-[Roboto] mq750:pt-[29px] mq750:pb-9 mq750:box-border relative z-[50] ${className}`}
         style={navigationRailStyle}
       >
         <div

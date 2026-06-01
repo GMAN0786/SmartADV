@@ -184,7 +184,7 @@ const NavigationRail: FunctionComponent<NavigationRailType> = ({
   return (
     <>
       <div
-        className={`min-h-screen w-[72px] overflow-hidden shrink-0 flex flex-col items-center pt-11 px-0 pb-14 box-border gap-[78px] text-center text-static-label-medium-size text-schemes-secondary font-[Roboto] ${className}`}
+        className={`min-h-screen w-[72px] overflow-hidden shrink-0 flex flex-col items-center pt-11 px-0 pb-14 box-border gap-[78px] text-center text-static-label-medium-size text-schemes-secondary font-[Roboto] relative z-[50] ${className}`}
       >
         <div className="flex flex-col items-center gap-[13px] shrink-0">
           <IconButtonStandard
