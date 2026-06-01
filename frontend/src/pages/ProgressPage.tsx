@@ -35,8 +35,8 @@ const ProgressPage: FunctionComponent = () => {
     const videoId = (location.state as any)?.videoId;
     videoIdRef.current = videoId;
     if (!videoId) {
-        setStatusText("업로드된 영상이 없습니다.");
-        return;
+      setStatusText("업로드된 영상이 없습니다.");
+      return;
     }
 
     const interval = setInterval(async () => {
@@ -49,7 +49,7 @@ const ProgressPage: FunctionComponent = () => {
           setProgress(job.progress || 0);
 
           let text = job.status;
-          if (job.status === "PREPROCESSING") text = "영상 분석 및 센서 감지 중...";
+          if (job.status === "PREPROCESSING") text = "영상 분석 중...";
           else if (job.status === "SCRIPT_GENERATING") text = "해설 대본 작성 중...";
           else if (job.status === "TTS_GENERATING") text = "해설 음성 합성 중...";
           else if (job.status === "DONE") text = "완료!";
@@ -82,9 +82,9 @@ const ProgressPage: FunctionComponent = () => {
             let audioUrl = "";
             let videoUrl = "";
             if (resultRes.ok) {
-               const resultData = await resultRes.json();
-               audioUrl = resultData.narrationAudioPath;
-               videoUrl = resultData.mergedVideoPath;
+              const resultData = await resultRes.json();
+              audioUrl = resultData.narrationAudioPath;
+              videoUrl = resultData.mergedVideoPath;
             }
             setTimeout(() => navigate(destination, { state: { videoId, audioUrl, videoUrl } }), 600);
           } else if (job.status === "FAILED" || job.status === "CANCELLED") {
@@ -108,7 +108,7 @@ const ProgressPage: FunctionComponent = () => {
       if (!jobDoneRef.current && videoIdRef.current) {
         const savedToken = localStorage.getItem("smartadv_token");
         const headers: HeadersInit = savedToken ? { "Authorization": "Bearer " + savedToken } : {};
-        fetch(`/api/jobs/${videoIdRef.current}/cancel`, { method: "POST", headers, keepalive: true }).catch(() => {});
+        fetch(`/api/jobs/${videoIdRef.current}/cancel`, { method: "POST", headers, keepalive: true }).catch(() => { });
         e.preventDefault();
       }
     };
@@ -121,7 +121,7 @@ const ProgressPage: FunctionComponent = () => {
       if (!jobDoneRef.current && videoIdRef.current) {
         const savedToken = localStorage.getItem("smartadv_token");
         const headers: HeadersInit = savedToken ? { "Authorization": "Bearer " + savedToken } : {};
-        fetch(`/api/jobs/${videoIdRef.current}/cancel`, { method: "DELETE", headers }).catch(() => {});
+        fetch(`/api/jobs/${videoIdRef.current}/cancel`, { method: "DELETE", headers }).catch(() => { });
       }
     };
   }, []);
