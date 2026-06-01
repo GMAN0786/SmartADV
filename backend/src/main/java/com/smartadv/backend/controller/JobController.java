@@ -1,5 +1,7 @@
 package com.smartadv.backend.controller;
 
+import com.smartadv.backend.common.security.UserContext;
+import com.smartadv.backend.domain.User;
 import com.smartadv.backend.repository.AnalysisJobRepository;
 import com.smartadv.backend.repository.ResultRepository;
 import com.smartadv.backend.service.StorageService;
@@ -14,6 +16,9 @@ import org.springframework.web.bind.annotation.*;
 
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.Map;
+import java.util.HashMap;
+import java.util.Optional;
 
 @RestController
 @RequestMapping("/api")
@@ -94,6 +99,8 @@ public class JobController {
                     response.put("errorMessage", job.getErrorMessage());
                     response.put("startedAt", job.getStartedAt());
                     response.put("finishedAt", job.getFinishedAt());
+                    response.put("llmInputTokens", job.getLlmInputTokens());
+                    response.put("llmOutputTokens", job.getLlmOutputTokens());
 
                     // Calculate queue positioning
                     long queuePosition = analysisJobRepository.countActiveJobsBefore(job.getId());
@@ -149,6 +156,35 @@ public class JobController {
                     response.put("s3RemainingMb", remainingMb);
                     response.put("s3RemainingPercent", remainingPercent);
 
+                    return ResponseEntity.ok(response);
+                })
+                .orElse(ResponseEntity.notFound().build());
+    }
+
+    @GetMapping("/jobs/latest")
+    public ResponseEntity<?> getLatestJob() {
+        User currentUser = UserContext.getCurrentUser();
+        if (currentUser == null) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(Map.of("error", "Not logged in."));
+        }
+        if (!"ADMIN".equals(currentUser.getRole())) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(Map.of("error", "Only administrators can access this information."));
+        }
+
+        return analysisJobRepository.findFirstByOrderByStartedAtDesc()
+                .map(job -> {
+                    Map<String, Object> response = new HashMap<>();
+                    response.put("id", job.getId());
+                    response.put("videoId", job.getVideoId());
+                    response.put("userId", job.getUserId());
+                    response.put("status", job.getStatus());
+                    response.put("progress", job.getProgress());
+                    response.put("statusDetail", job.getStatusDetail());
+                    response.put("errorMessage", job.getErrorMessage());
+                    response.put("startedAt", job.getStartedAt());
+                    response.put("finishedAt", job.getFinishedAt());
+                    response.put("llmInputTokens", job.getLlmInputTokens());
+                    response.put("llmOutputTokens", job.getLlmOutputTokens());
                     return ResponseEntity.ok(response);
                 })
                 .orElse(ResponseEntity.notFound().build());
