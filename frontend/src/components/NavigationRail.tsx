@@ -132,6 +132,7 @@ const NavigationRail: FunctionComponent<NavigationRailType> = ({
   };
 
   const onSettingsClick = useCallback(() => {
+    console.log("[NavigationRail] Settings clicked!");
     setIsSettingsOpen(true);
   }, []);
 
@@ -270,7 +271,7 @@ const NavigationRail: FunctionComponent<NavigationRailType> = ({
             </div>
           </div>
         </div>
-        <div className="self-stretch flex flex-col items-center justify-center py-1.5 px-0 gap-1 shrink-0 text-schemes-on-surface-variant cursor-pointer" onClick={onSettingsClick}>
+        <div className="self-stretch flex flex-col items-center justify-center py-1.5 px-0 gap-1 shrink-0 text-schemes-on-surface-variant cursor-pointer relative z-[60]" onClick={onSettingsClick}>
           <img
             className="cursor-pointer [border:none] p-0 bg-[transparent] w-6 h-6 relative"
             alt=""
@@ -285,7 +286,8 @@ const NavigationRail: FunctionComponent<NavigationRailType> = ({
 
       {isSettingsOpen && (
         <div 
-          className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-black/60 backdrop-blur-md animate-fade-in"
+          className="fixed inset-0 flex items-center justify-center p-4 bg-black/60 backdrop-blur-md animate-fade-in"
+          style={{ zIndex: 99999 }}
           onClick={closeSettings}
         >
           <style>{`
