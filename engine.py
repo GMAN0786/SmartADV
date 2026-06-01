@@ -36,6 +36,7 @@ OUTPUT_DIR = os.getenv("SMARTADV_OUTPUT", "output_clips")
 
 # Silero VAD 모델이 분석하기 위해 사용할 임시 오디오 파일의 이름
 TEMP_WAV = os.path.join(OUTPUT_DIR, "temp_16k.wav")
+TEMP_PROXY = os.path.join(OUTPUT_DIR, "temp_480p.mp4")
 
 # 너무 짧은 구간을 무시하기 위한 최소길이 (초)
 MIN_SILENCE_DURATION = 5.0
@@ -263,6 +264,19 @@ def main():
                     "-ac", "1", "-ar", "16k", TEMP_WAV],
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
+    report_progress(5, "경량 분석용 프록시 비디오(480p) 생성 중...")
+    print(" -> [프록시 생성] 경량 분석용 프록시 비디오(480p) 생성 중...")
+    subprocess.run([
+        "ffmpeg", "-y",
+        "-i", INPUT_FILE,
+        "-vf", "scale=-2:480",
+        "-c:v", "libx264",
+        "-preset", "ultrafast",
+        "-crf", "28",
+        "-an",
+        TEMP_PROXY
+    ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
     # STEP 2. Silero VAD 로드 및 음성(대사) 구간 탐지 (EC2 CPU 로컬 실행)
 
     report_progress(8, "Silero VAD 모델 로드 및 대사 구간 탐지 중...")
@@ -322,6 +336,16 @@ def main():
         silence_timestamps.append({'start': current_time, 'end': total_duration})
 
     # STEP 4. FFmpeg로 무음 구간 원본 영상에서 잘라내기 및 장면 분석
+
+    # Pass 0: 전체 비디오(프록시) 대상 글로벌 장면 전환 분석 (딱 1회)
+    report_progress(18, "전체 비디오에서 글로벌 장면 전환 분석 중...")
+    print(" -> [글로벌 분석] 전체 비디오 대상 글로벌 장면 감지 수행 중...")
+    global_scene_times = detect_scene_changes(
+        TEMP_PROXY,
+        threshold=SCENE_THRESHOLD,
+        min_scene_duration=MIN_SCENE_DURATION,
+    )
+    print(f" -> 글로벌 분석 완료 (총 {len(global_scene_times)}개의 장면 전환점 감지됨)")
 
     report_progress(20, f"총 {len(silence_timestamps)}개 무음 구간 분할 및 장면 분석 중...")
     print(f"[4/5] 총 {len(silence_timestamps)}개의 무음 구간을 FFmpeg로 분할 및 분석합니다...")
@@ -389,14 +413,8 @@ def main():
         else:
             print("   -> 이후 문맥 음원 없음 (영상 끝 구간과 맞닿아 있음)")
 
-        # --- 장면 전환(컷) 분석 및 프레임/샷 분할 ---
-        scene_times = detect_scene_changes(
-            INPUT_FILE,
-            threshold=SCENE_THRESHOLD,
-            start_time=start,
-            end_time=end,
-            min_scene_duration=MIN_SCENE_DURATION,
-        )
+        # --- 장면 전환(컷) 분석 및 프레임/샷 분할 (글로벌 컷 분할 및 메모리 필터링) ---
+        scene_times = [t - start for t in global_scene_times if start <= t <= end]
 
         # 장면전환 간격 < 5초인 것들을 scene 단위로 묶기
         scenes = group_cuts_into_scenes(scene_times, start, end)
@@ -493,9 +511,9 @@ def main():
                     "ffmpeg", "-y",
                     "-ss", str(first_cut),
                     "-to", str(window_end),
-                    "-i", INPUT_FILE,
-                    "-vf", "scale=-2:480",
+                    "-i", TEMP_PROXY,
                     "-c:v", "libx264",
+                    "-preset", "ultrafast",
                     "-an",
                     vid_out
                 ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -511,7 +529,7 @@ def main():
                     img_seq += 1
                     img_before = os.path.join(OUTPUT_DIR, f"silence{clip_count:03d}_scene{scene_idx:03d}_cut{img_seq:02d}.jpg")
                     subprocess.run([
-                        "ffmpeg", "-y", "-ss", str(before_time), "-i", INPUT_FILE,
+                        "ffmpeg", "-y", "-ss", str(before_time), "-i", TEMP_PROXY,
                         "-vframes", "1", "-q:v", "2", img_before
                     ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
@@ -519,7 +537,7 @@ def main():
                     img_seq += 1
                     img_after = os.path.join(OUTPUT_DIR, f"silence{clip_count:03d}_scene{scene_idx:03d}_cut{img_seq:02d}.jpg")
                     subprocess.run([
-                        "ffmpeg", "-y", "-ss", str(after_time), "-i", INPUT_FILE,
+                        "ffmpeg", "-y", "-ss", str(after_time), "-i", TEMP_PROXY,
                         "-vframes", "1", "-q:v", "2", img_after
                     ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
@@ -559,9 +577,11 @@ def main():
     write_silence_summary(silence_summaries)
     write_stt_summary(silence_summaries)
 
-    # 임시 오디오 파일(temp_16k.wav) 삭제하여 용량 확보
+    # 임시 오디오 및 프록시 비디오 삭제하여 용량 확보
     if os.path.exists(TEMP_WAV):
         os.remove(TEMP_WAV)
+    if os.path.exists(TEMP_PROXY):
+        os.remove(TEMP_PROXY)
 
     report_progress(33, "전처리 엔진 완료")
     print("\n모든 작업이 완료되었습니다")

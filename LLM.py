@@ -384,8 +384,67 @@ def build_prompt_video(silences: Dict[int, SilenceInfo]) -> str:
     return prompt
 
 
-def build_multimodal_contents(prompt: str, silences: Dict[int, SilenceInfo], client, mode: str) -> Tuple[List[object], List[str]]:
-    """프롬프트 텍스트 뒤에 scene별로 [scene 라벨 텍스트 → 해당 이미지 또는 동영상]을 교차 배치합니다."""
+def split_silences_into_batches(silences: Dict[int, SilenceInfo], max_scenes_per_batch: int = 10) -> List[Dict[int, SilenceInfo]]:
+    """무음구간(Silence)의 문맥 응집성을 극대화하기 위해 Silence 단위를 쪼개지 않고 배치로 묶습니다.
+    단, 단일 Silence 내 Scene 개수가 10개를 초과할 때만 가상 분할하여 전후 대사 맥락을 보존 주입합니다."""
+    batches = []
+    current_batch = {}
+    current_scenes_count = 0
+    
+    for silence_id in sorted(silences):
+        silence = silences[silence_id]
+        n_scenes = len(silence.scenes)
+        
+        # 장면전환이 없는 구간은 어디에나 들어갈 수 있음
+        if n_scenes == 0:
+            current_batch[silence_id] = silence
+            continue
+            
+        # Case A: 단일 무음구간에 속한 Scene 개수가 한 배치의 한계치를 넘는 예외 상황
+        if n_scenes > max_scenes_per_batch:
+            if current_batch:
+                batches.append(current_batch)
+                current_batch = {}
+                current_scenes_count = 0
+                
+            scenes_list = silence.scenes
+            for chunk_idx in range(0, len(scenes_list), max_scenes_per_batch):
+                chunk_scenes = scenes_list[chunk_idx : chunk_idx + max_scenes_per_batch]
+                split_silence = SilenceInfo(
+                    silence_id=silence.silence_id,
+                    start_seconds=silence.start_seconds,
+                    end_seconds=silence.end_seconds,
+                    context_before_lines=silence.context_before_lines.copy(),
+                    context_after_lines=silence.context_after_lines.copy(),
+                    scenes=chunk_scenes
+                )
+                
+                if len(chunk_scenes) == max_scenes_per_batch:
+                    batches.append({silence.silence_id: split_silence})
+                else:
+                    current_batch = {silence.silence_id: split_silence}
+                    current_scenes_count = len(chunk_scenes)
+            continue
+            
+        # Case B: 전체 무음구간을 추가하면 배치의 한계치를 넘는 경우 (배치 분할 선언)
+        if current_scenes_count + n_scenes > max_scenes_per_batch:
+            batches.append(current_batch)
+            current_batch = {silence_id: silence}
+            current_scenes_count = n_scenes
+            
+        # Case C: 전체 무음구간이 무리 없이 현재 배치에 속하는 경우
+        else:
+            current_batch[silence_id] = silence
+            current_scenes_count += n_scenes
+            
+    if current_batch:
+        batches.append(current_batch)
+        
+    return batches
+
+
+def build_multimodal_contents_for_batch(prompt: str, silences: Dict[int, SilenceInfo], client, mode: str, batch_num: int, total_batches: int) -> Tuple[List[object], List[str]]:
+    """해당 배치 스레드의 파일들을 Files API에 병렬 업로드하고 교차 배치합니다."""
     contents: List[object] = [prompt]
     uploaded_file_names: List[str] = []
 
@@ -395,8 +454,7 @@ def build_multimodal_contents(prompt: str, silences: Dict[int, SilenceInfo], cli
             for scene in silence.scenes
             if scene.video_path and scene.video_path.exists()
         )
-        print(f"[프롬프트] Files API 업로드 시작: 총 비디오 {total_videos}개")
-        report_progress(45, f"Gemini에 비디오 클립 {total_videos}개 업로드 시작...")
+        print(f"[Batch {batch_num}/{total_batches}] Files API 업로드 시작: 총 비디오 {total_videos}개")
 
         vid_idx = 0
         for silence_id in sorted(silences):
@@ -406,24 +464,18 @@ def build_multimodal_contents(prompt: str, silences: Dict[int, SilenceInfo], cli
                     continue
                 contents.append(f"[silence{silence.silence_id:03d} scene{scene.scene_id:03d} 동영상]")
                 vid_idx += 1
-                upload_pct = 45 + int((vid_idx / total_videos) * 13) if total_videos > 0 else 45
-                report_progress(upload_pct, f"비디오 업로드 중 ({vid_idx}/{total_videos}): {scene.video_path.name}")
-                print(f"[Files API] 업로드 중 ({vid_idx}/{total_videos}): {scene.video_path.name}")
+                print(f"[Batch {batch_num}/{total_batches}] 비디오 업로드 중 ({vid_idx}/{total_videos}): {scene.video_path.name}")
                 uploaded_file = upload_gemini_file(client, scene.video_path)
                 contents.append(uploaded_file)
                 uploaded_file_names.append(uploaded_file.name)
-                print(f"[Files API] 업로드 완료 ({vid_idx}/{total_videos}): {scene.video_path.name} -> {uploaded_file.name}")
-        
-        report_progress(58, "비디오 업로드 완료! Gemini AI 응답 대기 중...")
-        print(f"[프롬프트] Files API 업로드 완료: scene별 교차 배치, 원격 비디오 {total_videos}개")
+        print(f"[Batch {batch_num}/{total_batches}] 비디오 파일 업로드 완료")
     else:
         total_images = sum(
             1 for silence in silences.values()
             for scene in silence.scenes
             for img_path in scene.images if img_path.exists()
         )
-        print(f"[프롬프트] Files API 업로드 시작: 총 이미지 {total_images}개")
-        report_progress(45, f"Gemini에 키프레임 이미지 {total_images}장 업로드 시작...")
+        print(f"[Batch {batch_num}/{total_batches}] Files API 업로드 시작: 총 이미지 {total_images}개")
 
         img_idx = 0
         for silence_id in sorted(silences):
@@ -435,35 +487,24 @@ def build_multimodal_contents(prompt: str, silences: Dict[int, SilenceInfo], cli
                 contents.append(f"[silence{silence.silence_id:03d} scene{scene.scene_id:03d} 이미지]")
                 for image_path in existing_images:
                     img_idx += 1
-                    upload_pct = 45 + int((img_idx / total_images) * 13) if total_images > 0 else 45
-                    report_progress(upload_pct, f"이미지 업로드 중 ({img_idx}/{total_images}): {image_path.name}")
-                    print(f"[Files API] 업로드 중 ({img_idx}/{total_images}): {image_path.name}")
+                    print(f"[Batch {batch_num}/{total_batches}] 이미지 업로드 중 ({img_idx}/{total_images}): {image_path.name}")
                     uploaded_file = upload_gemini_file(client, image_path)
                     contents.append(uploaded_file)
                     uploaded_file_names.append(uploaded_file.name)
-                    print(f"[Files API] 업로드 완료 ({img_idx}/{total_images}): {image_path.name} -> {uploaded_file.name}")
-
-        report_progress(58, "이미지 업로드 완료! Gemini AI 응답 대기 중...")
-        print(f"[프롬프트] Files API 업로드 완료: scene별 교차 배치, 원격 이미지 {total_images}개")
+        print(f"[Batch {batch_num}/{total_batches}] 이미지 파일 업로드 완료")
 
     return contents, uploaded_file_names
 
 
 def upload_gemini_file(client, file_path: Path):
-    """단일 이미지를 Gemini Files API에 업로드하고 ACTIVE 상태가 될 때까지 대기합니다."""
+    """단일 미디어 파일을 Gemini Files API에 업로드하고 ACTIVE 상태가 될 때까지 대기합니다."""
     uploaded_file = client.files.upload(file=str(file_path))
-    print(f"[Files API] 원격 처리 대기 시작: {file_path.name} -> {uploaded_file.name}")
     deadline = time.time() + GEMINI_FILE_POLL_TIMEOUT_SECONDS
-    last_logged_state = None
 
     while time.time() < deadline:
         current = client.files.get(name=uploaded_file.name)
         state = getattr(current, "state", None)
         state_name = getattr(state, "name", str(state)) if state is not None else "UNKNOWN"
-
-        if state_name != last_logged_state:
-            print(f"[Files API] 상태 변경: {file_path.name} -> {state_name}")
-            last_logged_state = state_name
 
         if state_name == "ACTIVE":
             return current
@@ -476,9 +517,8 @@ def upload_gemini_file(client, file_path: Path):
 
 
 def delete_uploaded_gemini_files(client, file_names: List[str]) -> None:
-    """이번 요청에서 업로드한 Gemini Files API 파일만 정리합니다."""
+    """이번 스레드 배치 요청에서 업로드한 고유 Gemini 파일만 정리합니다."""
     if not GEMINI_DELETE_UPLOADED_FILES_AFTER_REQUEST:
-        print("[Gemini] 요청 후 업로드 파일 삭제 생략 설정됨")
         return
 
     deleted_count = 0
@@ -490,7 +530,7 @@ def delete_uploaded_gemini_files(client, file_names: List[str]) -> None:
         except Exception:
             failed_count += 1
 
-    print(f"[Gemini] 요청 후 업로드 파일 정리 완료: 삭제 {deleted_count}개, 실패 {failed_count}개")
+    print(f"[Gemini] 배치 스레드 업로드 파일 정리 완료: 삭제 {deleted_count}개, 실패 {failed_count}개")
 
 
 def strip_code_fence(text: str) -> str:
@@ -505,33 +545,47 @@ def strip_code_fence(text: str) -> str:
     return cleaned
 
 
-def normalize_csv_text(csv_text: str) -> str:
-    cleaned = strip_code_fence(csv_text)
-    rows = list(csv.reader(io.StringIO(cleaned)))
-    if not rows:
-        raise ValueError("Gemini 응답에서 CSV를 찾지 못했습니다.")
-
+def merge_csv_results(csv_results: List[str]) -> str:
+    """각 배치 스레드로부터 수신된 CSV 응답들을 똑똑하게 헤더 교정 및 정규화하여 하나로 병합합니다."""
     expected_header = ["silence_id", "scene_id", "window_start", "window_end", "text"]
-    header = [cell.strip() for cell in rows[0]]
-    if header != expected_header:
-        raise ValueError(f"CSV 헤더가 예상과 다릅니다: {header}")
-
+    merged_rows = []
+    
+    for csv_text in csv_results:
+        try:
+            cleaned = strip_code_fence(csv_text)
+            rows = list(csv.reader(io.StringIO(cleaned)))
+            if not rows:
+                continue
+            
+            header = [cell.strip() for cell in rows[0]]
+            start_idx = 1
+            if header != expected_header:
+                if len(header) >= 5 and header[0].strip().lower() in ("silence_id", "silenceid", "silence"):
+                    start_idx = 1
+                else:
+                    start_idx = 0
+            
+            for row in rows[start_idx:]:
+                if not row or all(not cell.strip() for cell in row):
+                    continue
+                merged_rows.append(row)
+        except Exception as e:
+            print(f"[Warning] CSV 결과 파싱 실패: {e}")
+            
     output = io.StringIO()
     writer = csv.writer(output, lineterminator="\n")
     writer.writerow(expected_header)
-
-    for row in rows[1:]:
-        if not row or all(not cell.strip() for cell in row):
-            continue
+    
+    for row in merged_rows:
         normalized = (row + [""] * len(expected_header))[: len(expected_header)]
         normalized = [cell.strip() for cell in normalized]
-        # silence_id, scene_id에 'silence001', 'scene01' 같은 접두사가 붙어 있으면 숫자만 추출
+        
         for col_idx in (0, 1):
             digits = re.sub(r'\D', '', normalized[col_idx])
             if digits:
                 normalized[col_idx] = str(int(digits))
         writer.writerow(normalized)
-
+        
     return output.getvalue().strip() + "\n"
 
 
@@ -555,12 +609,11 @@ def csv_to_txt(csv_text: str) -> str:
 
 
 def cleanup_gemini_files(client) -> None:
-    """요청 시작 전에 Gemini Files API에 남아 있는 이전 업로드 파일들을 정리합니다."""
+    """Gemini Files API 계정에 남아 있는 이전/최종 찌꺼기 파일들을 완벽히 일괄 삭제합니다."""
     if not GEMINI_CLEAR_FILES_BEFORE_REQUEST:
-        print("[Gemini] Files API 사전 정리 생략 설정됨")
         return
 
-    print("[Gemini] Files API 사전 정리 시작")
+    print("[Gemini] Files API 강제 일괄 클린업 작동 중...")
     deleted_count = 0
     failed_count = 0
     listed_count = 0
@@ -574,33 +627,28 @@ def cleanup_gemini_files(client) -> None:
             try:
                 client.files.delete(name=file_name)
                 deleted_count += 1
-                print(f"[Gemini] 이전 업로드 파일 삭제: {file_name}")
-            except Exception as exc:
+            except Exception:
                 failed_count += 1
-                print(f"[Gemini] 이전 업로드 파일 삭제 실패: {file_name} | {exc}")
 
-        print(f"[Gemini] Files API 사전 정리 완료: 조회 {listed_count}개, 삭제 {deleted_count}개, 실패 {failed_count}개")
+        print(f"[Gemini] Files API 클린업 완수: 대상 {listed_count}개 중 {deleted_count}개 삭제 성공 (실패 {failed_count}개)")
     except Exception as exc:
-        print(f"[Gemini] Files API 목록 조회/정리 실패: {exc}")
+        print(f"[Gemini] Files API 일괄 정리 실패: {exc}")
 
 
-def call_gemini(prompt: str, silences: Dict[int, SilenceInfo], mode: str) -> str:
-    api_key = os.getenv("GEMINI_API_KEY")
-    if not api_key:
-        raise EnvironmentError("GEMINI_API_KEY 환경변수가 설정되어 있지 않습니다.")
-
-    client = genai.Client(api_key=api_key)
-    cleanup_gemini_files(client)
-    contents, uploaded_file_names = build_multimodal_contents(prompt, silences, client, mode)
+def call_gemini_for_batch(client, prompt: str, silences: Dict[int, SilenceInfo], mode: str, batch_num: int, total_batches: int) -> Tuple[str, int, int, int]:
+    """개별 스레드 배치를 위해 Gemini API를 안전하게 실행하고 토큰 정보를 반환합니다."""
+    contents, uploaded_file_names = build_multimodal_contents_for_batch(prompt, silences, client, mode, batch_num, total_batches)
 
     max_retries = GEMINI_MAX_RETRIES
     last_error = None
+    prompt_tokens = 0
+    completion_tokens = 0
+    total_tokens = 0
 
     try:
         for attempt in range(1, max_retries + 1):
             try:
-                report_progress(58, f"Gemini AI 응답 대기 중... (시도 {attempt}/{max_retries})")
-                print(f"[Gemini] 요청 시작: model={GEMINI_MODEL} (시도 {attempt}/{max_retries}, 타임아웃 {GEMINI_TIMEOUT_SECONDS}초)")
+                print(f"[Gemini Batch {batch_num}/{total_batches}] 대본 요청 시작 (시도 {attempt}/{max_retries})")
 
                 with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
                     future = executor.submit(
@@ -615,23 +663,21 @@ def call_gemini(prompt: str, silences: Dict[int, SilenceInfo], mode: str) -> str
                     try:
                         response = future.result(timeout=GEMINI_TIMEOUT_SECONDS)
                     except concurrent.futures.TimeoutError:
-                        raise TimeoutError(f"Gemini API 응답 {GEMINI_TIMEOUT_SECONDS}초 타임아웃 (503 UNAVAILABLE)")
+                        raise TimeoutError(f"Gemini Batch {batch_num} 응답 {GEMINI_TIMEOUT_SECONDS}초 타임아웃")
 
-                print("[Gemini] 응답 수신 완료")
+                print(f"[Gemini Batch {batch_num}/{total_batches}] 응답 수신 성공")
+                
                 try:
                     if hasattr(response, "usage_metadata") and response.usage_metadata is not None:
-                        prompt_tokens = response.usage_metadata.prompt_token_count
-                        completion_tokens = response.usage_metadata.candidates_token_count
-                        total_tokens = response.usage_metadata.total_token_count
-                        token_usage_path = OUTPUT_DIR / "token_usage.txt"
-                        token_usage_path.write_text(f"{prompt_tokens},{completion_tokens},{total_tokens}", encoding="utf-8")
-                        print(f"[Gemini] 토큰 사용량 저장 완료: 입력={prompt_tokens}, 출력={completion_tokens}, 합계={total_tokens}")
+                        prompt_tokens = response.usage_metadata.prompt_token_count or 0
+                        completion_tokens = response.usage_metadata.candidates_token_count or 0
+                        total_tokens = response.usage_metadata.total_token_count or 0
                 except Exception as exc:
-                    print(f"[Gemini] 토큰 사용량 추출/저장 실패: {exc}")
+                    print(f"[Gemini Batch {batch_num}] 토큰 메타 추출 오류: {exc}")
 
                 if not response.text:
-                    raise ValueError("Gemini 응답 텍스트가 비어 있습니다.")
-                return response.text
+                    raise ValueError(f"Gemini Batch {batch_num} 응답 텍스트 공백 오류")
+                return response.text, prompt_tokens, completion_tokens, total_tokens
 
             except Exception as e:
                 last_error = e
@@ -640,9 +686,8 @@ def call_gemini(prompt: str, silences: Dict[int, SilenceInfo], mode: str) -> str
                     "503", "UNAVAILABLE", "429", "RESOURCE_EXHAUSTED", "500", "INTERNAL", "Timeout", "타임아웃"
                 ])
                 if is_retryable and attempt < max_retries:
-                    wait_sec = 30 * attempt
-                    report_progress(58, f"서버 과부하/타임아웃! {wait_sec}초 후 재시도... ({attempt}/{max_retries})")
-                    print(f"[Gemini] 재시도 사유: ({error_str[:80]}...). {wait_sec}초 후 재시도합니다.")
+                    wait_sec = 15 * attempt
+                    print(f"[Gemini Batch {batch_num}] 서버 대기 후 재시도 ({wait_sec}초) | 사유: {error_str[:80]}...")
                     time.sleep(wait_sec)
                 else:
                     raise
@@ -676,32 +721,85 @@ def main() -> None:
     if not silences:
         raise ValueError("처리할 무음구간 데이터가 없습니다.")
 
-    report_progress(40, "Gemini 프롬프트 구성 중...")
-    print("[3/4] Gemini 프롬프트 생성 시작")
-    if LLM_MODE == "VIDEO":
-        prompt = build_prompt_video(silences)
-    else:
-        prompt = build_prompt_image(silences)
-    print("[3/4] Gemini 프롬프트 생성 완료")
+    report_progress(40, "Gemini 프롬프트 구성 및 배칭 처리 중...")
+    print("[3/4] Gemini 프롬프트 구성 및 문맥 흐름 보존형 배칭 분할 시작")
+    
+    # VIDEO/IMAGE 모드 모두 최대 10개 Scene 단위 병렬 배치 분할 실행
+    batches = split_silences_into_batches(silences, max_scenes_per_batch=10)
+    print(f" -> 문맥 보존 배칭 완수: 총 {len(silences)}개 무음구간을 {len(batches)}개 배치로 분할함 (배치당 최대 10개 Scene)")
 
-    report_progress(45, "Gemini AI에 해설 대본 요청 중... (최대 수 분 소요)")
-    print("[4/4] Gemini 호출 시작")
-    raw_response = call_gemini(prompt, silences, LLM_MODE)
-    print(f"[4/4] Gemini 호출 완료: 응답 {len(raw_response)}자")
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        raise EnvironmentError("GEMINI_API_KEY 환경변수가 설정되어 있지 않습니다.")
 
-    report_progress(60, "AI 응답 후처리 및 대본 저장 중...")
-    LLM_RAW_OUTPUT_PATH.write_text(raw_response, encoding="utf-8")
-    print(f"[저장] 원본 응답 저장 완료: {LLM_RAW_OUTPUT_PATH}")
+    client = genai.Client(api_key=api_key)
 
-    normalized_csv = normalize_csv_text(raw_response)
-    LLM_CSV_OUTPUT_PATH.write_text(normalized_csv, encoding="utf-8")
-    LLM_TXT_OUTPUT_PATH.write_text(csv_to_txt(normalized_csv), encoding="utf-8")
-    print("[저장] 응답 후처리 및 파일 저장 완료")
+    # 1. 최초 사전 클린업: 시작 전 찌꺼기 완벽 정리
+    cleanup_gemini_files(client)
+
+    batch_results = [None] * len(batches)
+    total_prompt_tokens = 0
+    total_completion_tokens = 0
+    total_overall_tokens = 0
+
+    print(f"[4/4] Gemini 호출 시작: 총 {len(batches)}개 배치를 병렬(ThreadPool)로 전송합니다.")
+    report_progress(45, f"Gemini AI에 병렬로 해설 대본 요청 중... (총 {len(batches)}개 배치)")
+
+    def process_batch_worker(batch_idx: int, batch_silences: Dict[int, SilenceInfo]):
+        if LLM_MODE == "VIDEO":
+            batch_prompt = build_prompt_video(batch_silences)
+        else:
+            batch_prompt = build_prompt_image(batch_silences)
+        
+        return call_gemini_for_batch(client, batch_prompt, batch_silences, LLM_MODE, batch_idx + 1, len(batches))
+
+    # 최적의 동시 실행 수 5개 스레드로 병렬 가동
+    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+        future_to_idx = {
+            executor.submit(process_batch_worker, i, batch): i 
+            for i, batch in enumerate(batches)
+        }
+
+        for future in concurrent.futures.as_completed(future_to_idx):
+            idx = future_to_idx[future]
+            try:
+                res_text, p_tok, c_tok, t_tok = future.result()
+                batch_results[idx] = res_text
+                
+                # 스레드 안전하게 토큰 사용량 집계
+                total_prompt_tokens += p_tok
+                total_completion_tokens += c_tok
+                total_overall_tokens += t_tok
+            except Exception as exc:
+                print(f"[Fatal] 배치 {idx + 1} 병렬 기동 실패: {exc}")
+                raise exc
+
+    print("[Gemini] 모든 병렬 배치 스레드 응답 수신 완료")
+
+    # 토큰 총합 기록 저장
+    try:
+        token_usage_path = OUTPUT_DIR / "token_usage.txt"
+        token_usage_path.write_text(f"{total_prompt_tokens},{total_completion_tokens},{total_overall_tokens}", encoding="utf-8")
+        print(f"[Gemini] 합산 토큰 사용량 기록 완료: 입력={total_prompt_tokens}, 출력={total_completion_tokens}, 합계={total_overall_tokens}")
+    except Exception as exc:
+        print(f"[Gemini] 합산 토큰 기록 실패: {exc}")
+
+    report_progress(60, "AI 응답 통합 병합 및 대본 저장 중...")
+    
+    # 2. 수신된 모든 스레드 결과를 하나로 정교하게 병합 및 정규화
+    merged_csv = merge_csv_results([r for r in batch_results if r])
+    
+    LLM_RAW_OUTPUT_PATH.write_text("\n\n---\n\n".join([r for r in batch_results if r]), encoding="utf-8")
+    LLM_CSV_OUTPUT_PATH.write_text(merged_csv, encoding="utf-8")
+    LLM_TXT_OUTPUT_PATH.write_text(csv_to_txt(merged_csv), encoding="utf-8")
+    print("[저장] 병합 및 CSV/TXT 대본 생성 완료")
+
+    # 3. 최종 사후 클린업: 작업 성공 시 찌꺼기 파일 완벽 정리
+    cleanup_gemini_files(client)
 
     report_progress(66, "해설 대본 생성 완료")
-    print(f"Gemini 원본 응답 저장: {LLM_RAW_OUTPUT_PATH}")
-    print(f"Gemini CSV 저장: {LLM_CSV_OUTPUT_PATH}")
-    print(f"Gemini TXT 저장: {LLM_TXT_OUTPUT_PATH}")
+    print(f"Gemini CSV 대본 저장 완료: {LLM_CSV_OUTPUT_PATH}")
+    print(f"Gemini TXT 대본 저장 완료: {LLM_TXT_OUTPUT_PATH}")
 
 
 if __name__ == "__main__":
