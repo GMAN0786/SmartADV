@@ -31,6 +31,7 @@ type AppContextType = {
   login: (token: string, user: UserProfile) => void;
   logout: () => void;
   fetchArchive: () => Promise<void>;
+  deleteArchiveItem: (id: string) => Promise<void>;
   isLoadingArchive: boolean;
 };
 
@@ -162,6 +163,34 @@ export const AppProvider: FunctionComponent<{ children: ReactNode }> = ({ childr
     }
   };
 
+  const deleteArchiveItem = async (id: string) => {
+    if (!token) return;
+    const targetItem = archiveItems.find((item) => item.id === id);
+    if (!targetItem) return;
+
+    // Optimistic Update
+    setArchiveItems((prev) => prev.filter((item) => item.id !== id));
+    if (currentItem?.id === id) {
+      setCurrentItem(null);
+    }
+
+    try {
+      const res = await fetch(`/api/archive/${id}`, {
+        method: "DELETE",
+        headers: {
+          "Authorization": `Bearer ${token}`
+        }
+      });
+      if (!res.ok) {
+        throw new Error("Failed to delete archive item on backend");
+      }
+    } catch (e) {
+      console.error("Failed to delete archive item", e);
+      // Fetch archive again to restore consistency on failure
+      fetchArchive();
+    }
+  };
+
   return (
     <AppContext.Provider value={{
       archiveItems,
@@ -174,6 +203,7 @@ export const AppProvider: FunctionComponent<{ children: ReactNode }> = ({ childr
       login,
       logout,
       fetchArchive,
+      deleteArchiveItem,
       isLoadingArchive
     }}>
       {children}

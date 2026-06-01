@@ -5,7 +5,7 @@ import { useAppContext } from "../context/AppContext";
 
 const Archive: FunctionComponent = () => {
   const navigate = useNavigate();
-  const { archiveItems, toggleLike, setCurrentItem, fetchArchive } = useAppContext();
+  const { archiveItems, toggleLike, setCurrentItem, fetchArchive, deleteArchiveItem } = useAppContext();
 
   useEffect(() => {
     fetchArchive();
@@ -52,7 +52,7 @@ const Archive: FunctionComponent = () => {
                 {archiveItems.map((item) => (
                   <div
                     key={item.id}
-                    className="self-stretch rounded-xl bg-schemes-surface-container-lowest border-[#e0e0e0] border-solid border-[1px] flex items-center p-4 gap-4 cursor-pointer"
+                    className="self-stretch rounded-xl bg-schemes-surface-container-lowest border-[#e0e0e0] border-solid border-[1px] flex items-center p-4 gap-4 cursor-pointer hover:bg-schemes-surface-container-low transition-colors duration-200"
                     onClick={() => {
                       setCurrentItem(item);
                       if (item.type === "url") {
@@ -75,17 +75,55 @@ const Archive: FunctionComponent = () => {
                         {item.date} | {item.type === "url" ? "URL" : "파일 업로드"} | {item.audioSize}
                       </div>
                     </div>
-                    <button
-                      className="cursor-pointer [border:none] p-2 bg-[transparent] flex items-center justify-center"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        toggleLike(item.id);
-                      }}
-                    >
-                      <span className="material-icons text-[24px]" style={{ color: item.liked ? "#6750a4" : "#79747e" }}>
-                        {item.liked ? "favorite" : "favorite_border"}
-                      </span>
-                    </button>
+                    <div className="flex items-center gap-1">
+                      <button
+                        className="cursor-pointer [border:none] p-2 bg-[transparent] flex items-center justify-center hover:bg-schemes-surface-container rounded-full transition-colors duration-200"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          toggleLike(item.id);
+                        }}
+                        title="좋아요"
+                      >
+                        <span className="material-icons text-[24px]" style={{ color: item.liked ? "#6750a4" : "#79747e" }}>
+                          {item.liked ? "favorite" : "favorite_border"}
+                        </span>
+                      </button>
+                      <button
+                        className="cursor-pointer [border:none] p-2 bg-[transparent] flex items-center justify-center hover:bg-schemes-surface-container rounded-full transition-colors duration-200"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          const audioUrlFromBackend = item.audioFileName;
+                          const downloadUrl = audioUrlFromBackend
+                            ? (audioUrlFromBackend.startsWith("http") ? audioUrlFromBackend : `/api/storage/stream?url=${encodeURIComponent(audioUrlFromBackend)}`)
+                            : "/dummy_audio.wav";
+                          const link = document.createElement("a");
+                          link.href = downloadUrl;
+                          link.download = item.audioFileName || "smartadv_audio.wav";
+                          document.body.appendChild(link);
+                          link.click();
+                          document.body.removeChild(link);
+                        }}
+                        title="음성 파일 다운로드"
+                      >
+                        <span className="material-icons text-[24px] text-schemes-on-surface-variant hover:text-schemes-primary transition-colors duration-200">
+                          download
+                        </span>
+                      </button>
+                      <button
+                        className="cursor-pointer [border:none] p-2 bg-[transparent] flex items-center justify-center hover:bg-schemes-surface-container rounded-full transition-colors duration-200"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (window.confirm("정말로 이 기록을 삭제하시겠습니까?\n서버에 저장된 동영상 및 음성 파일도 함께 삭제됩니다.")) {
+                            deleteArchiveItem(item.id);
+                          }
+                        }}
+                        title="삭제"
+                      >
+                        <span className="material-icons text-[24px] text-schemes-on-surface-variant hover:text-[#ba1a1a] transition-colors duration-200">
+                          delete
+                        </span>
+                      </button>
+                    </div>
                   </div>
                 ))}
               </div>

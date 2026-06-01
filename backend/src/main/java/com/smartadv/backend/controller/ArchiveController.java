@@ -85,4 +85,38 @@ public class ArchiveController {
             return ResponseEntity.ok(Map.of("id", id, "liked", result.isLiked()));
         }).orElse(ResponseEntity.notFound().build());
     }
+
+    @org.springframework.web.bind.annotation.DeleteMapping("/{id}")
+    public ResponseEntity<?> deleteResult(@org.springframework.web.bind.annotation.PathVariable Long id) {
+        User currentUser = UserContext.getCurrentUser();
+        if (currentUser == null) {
+            return ResponseEntity.status(org.springframework.http.HttpStatus.UNAUTHORIZED).build();
+        }
+
+        return resultRepository.findById(id).map(result -> {
+            if (!result.getUserId().equals(currentUser.getId())) {
+                return ResponseEntity.status(org.springframework.http.HttpStatus.FORBIDDEN).build();
+            }
+            
+            // Delete associated files if possible
+            try {
+                // Delete merged video
+                if (result.getMergedVideoPath() != null && result.getMergedVideoPath().startsWith("mock-s3://")) {
+                    String localVideoPath = result.getMergedVideoPath().replace("mock-s3://", "");
+                    java.nio.file.Files.deleteIfExists(java.nio.file.Paths.get(localVideoPath));
+                }
+                // Delete narration audio
+                if (result.getNarrationAudioPath() != null && result.getNarrationAudioPath().startsWith("mock-s3://")) {
+                    String localAudioPath = result.getNarrationAudioPath().replace("mock-s3://", "");
+                    java.nio.file.Files.deleteIfExists(java.nio.file.Paths.get(localAudioPath));
+                }
+            } catch (Exception e) {
+                // Log and ignore file deletion errors to make sure entry is deleted
+                System.err.println("Failed to delete local files for result " + id + ": " + e.getMessage());
+            }
+
+            resultRepository.delete(result);
+            return ResponseEntity.ok(Map.of("id", id, "message", "Deleted successfully"));
+        }).orElse(ResponseEntity.notFound().build());
+    }
 }
