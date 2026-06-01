@@ -240,11 +240,16 @@ def generate_tts_segments(rows: List[ADScriptRow]) -> List[GeneratedSegment]:
 
         # 실제 가용 시간 = window_duration - 0.3초(시작 오프셋)
         available_duration = row.window_duration - (TTS_START_OFFSET_MS / 1000)
+        # 가용 시간이 0 이하이면 최소 0.1초로 보정 (FFmpeg atempo 음수/0 방지)
+        if available_duration <= 0:
+            available_duration = 0.1
 
         # 오디오가 가용 시간을 초과하면 atempo로 압축 (최대 1.3x)
         if raw_duration > available_duration:
             needed_speed = raw_duration / available_duration
             atempo_speed = min(MAX_ATEMPO_SPEED, needed_speed)
+            # FFmpeg atempo 유효 범위: 0.5 ~ 100.0
+            atempo_speed = max(0.5, min(100.0, atempo_speed))
             apply_atempo(raw_path, final_path, atempo_speed)
             final_duration = get_media_duration_seconds(final_path)
             print(
