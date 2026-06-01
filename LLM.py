@@ -668,6 +668,22 @@ def cleanup_gemini_files(client) -> None:
         print(f"[Gemini] Files API 일괄 정리 실패: {exc}")
 
 
+TAG_CLEAN_REGEX = re.compile(
+    r'(?:\*\*|)?(?:(?:\(|\[)\s*(?:\+\s*\d+(?:\.\d+)?|\d+\.\d+|\d+\s*(?:초|s|sec|seconds|"))\s*(?:초|s|sec|seconds|")*?\s*(?:\)|\])|\+\s*\d+(?:\.\d+)?\s*(?:초|s|sec|seconds|")*?)(?:\*\*|)?'
+)
+
+def clean_narration_text(text: str) -> str:
+    if not text:
+        return ""
+    # Remove all timing tags anywhere in the string
+    cleaned = TAG_CLEAN_REGEX.sub("", text)
+    # Strip any remaining quote marks, colons, hyphens, and whitespace leftovers
+    cleaned = cleaned.strip('"\'“`”-:;~> \t\n')
+    # Collapse multiple consecutive whitespace characters to a single space
+    cleaned = re.sub(r'\s+', ' ', cleaned)
+    return cleaned
+
+
 def align_and_correct_csv(csv_text: str, batch_silences: Dict[int, SilenceInfo]) -> str:
     """Gemini가 출력한 CSV 응답의 타임스탬프와 ID 할루시네이션을
     원본 데이터 구조(batch_silences)의 정확한 값으로 강제 교정 및 정렬합니다.
@@ -749,10 +765,6 @@ def align_and_correct_csv(csv_text: str, batch_silences: Dict[int, SilenceInfo])
             if match:
                 offset_str = match.group(1) or match.group(2)
                 offset_seconds = float(offset_str)
-                cleaned_text = match.group(3).strip()
-                # 잔여 따옴표, 콜론, 대시 등 잔여물 말끔히 소거
-                cleaned_text = cleaned_text.strip('"\'“`”-: ')
-                
                 # 원본 scene 시작점으로부터 상대초만큼 시프트
                 new_start_abs = exp["window_start_abs"] + offset_seconds
                 # window_end_abs 범위를 벗어나지 않도록 clamp (안전 장치)
@@ -760,7 +772,11 @@ def align_and_correct_csv(csv_text: str, batch_silences: Dict[int, SilenceInfo])
                     new_start_abs = exp["window_end_abs"]
                 
                 exp["window_start"] = seconds_to_hhmmss(new_start_abs)
-                matched_text = cleaned_text
+            
+            # 대본에서 모든 형식의 [+상대초] 태그 완전히 소거 및 텍스트 정제
+            matched_text = clean_narration_text(matched_text)
+        elif matched_text:
+            matched_text = clean_narration_text(matched_text)
 
         # 만약 매칭된 텍스트가 없으면 최소한의 처리 또는 스킵 (혹은 Gemini 텍스트 직접 사용)
         if matched_text:

@@ -1,5 +1,6 @@
 import csv
 import os
+import re
 import shutil
 import subprocess
 import asyncio
@@ -25,6 +26,22 @@ TTS_TIMELINE_PATH = OUTPUT_DIR / "tts_timeline.csv"
 NARRATION_MIX_PATH = OUTPUT_DIR / "ad_narration_mix.wav"
 FINAL_VIDEO_PATH = OUTPUT_DIR / "input_with_ad.mp4"
 FINAL_AUDIO_PATH = OUTPUT_DIR / "input_with_ad_audio.m4a"
+
+TAG_CLEAN_REGEX = re.compile(
+    r'(?:\*\*|)?(?:(?:\(|\[)\s*(?:\+\s*\d+(?:\.\d+)?|\d+\.\d+|\d+\s*(?:초|s|sec|seconds|"))\s*(?:초|s|sec|seconds|")*?\s*(?:\)|\])|\+\s*\d+(?:\.\d+)?\s*(?:초|s|sec|seconds|")*?)(?:\*\*|)?'
+)
+
+def clean_narration_text(text: str) -> str:
+    if not text:
+        return ""
+    # Remove all timing tags anywhere in the string
+    cleaned = TAG_CLEAN_REGEX.sub("", text)
+    # Strip any remaining quote marks, colons, hyphens, and whitespace leftovers
+    cleaned = cleaned.strip('"\'“`”-:;~> \t\n')
+    # Collapse multiple consecutive whitespace characters to a single space
+    cleaned = re.sub(r'\s+', ' ', cleaned)
+    return cleaned
+
 
 # Edge TTS 설정
 EDGE_TTS_VOICE = os.getenv("EDGE_TTS_VOICE", "ko-KR-SunHiNeural")
@@ -216,8 +233,9 @@ def generate_tts_segments(rows: List[ADScriptRow]) -> List[GeneratedSegment]:
         raw_path = TTS_SEGMENTS_DIR / f"silence_{row.silence_id:03d}_scene_{row.scene_id:03d}_raw.wav"
         final_path = TTS_SEGMENTS_DIR / f"silence_{row.silence_id:03d}_scene_{row.scene_id:03d}.wav"
 
-        # 기본 속도로 TTS 생성
-        synthesize_with_edge_tts(row.text, raw_path, BASE_TTS_SPEED)
+        # 기본 속도로 TTS 생성 (혹시 대본에 남아있을 수 있는 [+상대초] 태그 최종 정제 후 전송)
+        cleaned_text = clean_narration_text(row.text)
+        synthesize_with_edge_tts(cleaned_text, raw_path, BASE_TTS_SPEED)
         raw_duration = get_media_duration_seconds(raw_path)
 
         # 실제 가용 시간 = window_duration - 0.3초(시작 오프셋)
