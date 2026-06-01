@@ -37,6 +37,6 @@ public class WebConfig implements WebMvcConfigurer {
     public void addInterceptors(InterceptorRegistry registry) {
         registry.addInterceptor(authInterceptor)
                 .addPathPatterns("/api/**")
-                .excludePathPatterns("/api/auth/google", "/api/storage/stream");
+                .excludePathPatterns("/api/auth/google", "/api/storage/stream", "/api/maintenance/status");
     }
 }

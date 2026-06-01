@@ -16,6 +16,7 @@ import Login from "./pages/Login";
 import Archive from "./pages/Archive";
 import Likes from "./pages/Likes";
 import { useAppContext } from "./context/AppContext";
+import MaintenancePage from "./pages/MaintenancePage";
 
 // Protected route wrapper
 const ProtectedRoute = ({ children }: { children: JSX.Element }) => {
@@ -31,12 +32,28 @@ function App() {
   const action = useNavigationType();
   const location = useLocation();
   const pathname = location.pathname;
+  const { isMaintenanceMode, isLoadingMaintenance, user } = useAppContext();
 
   useEffect(() => {
     if (action !== "POP") {
       window.scrollTo(0, 0);
     }
   }, [action, pathname]);
+
+  if (isLoadingMaintenance) {
+    return (
+      <div className="flex h-screen w-full items-center justify-center bg-[#0f172a] text-white">
+        <div className="flex flex-col items-center gap-4">
+          <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-blue-500"></div>
+          <p className="text-sm font-medium tracking-wide text-slate-400 font-[Inter]">Loading SmartADV...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (isMaintenanceMode && (!user || user.role !== "ADMIN")) {
+    return <MaintenancePage />;
+  }
 
   useEffect(() => {
     let title = "";

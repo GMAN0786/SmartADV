@@ -33,6 +33,9 @@ type AppContextType = {
   fetchArchive: () => Promise<void>;
   deleteArchiveItem: (id: string) => Promise<void>;
   isLoadingArchive: boolean;
+  isMaintenanceMode: boolean;
+  isLoadingMaintenance: boolean;
+  checkMaintenance: () => Promise<void>;
 };
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -46,7 +49,25 @@ export const AppProvider: FunctionComponent<{ children: ReactNode }> = ({ childr
   const [token, setToken] = useState<string | null>(null);
   const [isLoadingArchive, setIsLoadingArchive] = useState(false);
 
-  // Initialize auth from localStorage
+  // Maintenance state
+  const [isMaintenanceMode, setIsMaintenanceMode] = useState(false);
+  const [isLoadingMaintenance, setIsLoadingMaintenance] = useState(true);
+
+  const checkMaintenance = async () => {
+    try {
+      const res = await fetch("/api/maintenance/status");
+      if (res.ok) {
+        const data = await res.json();
+        setIsMaintenanceMode(data.enabled);
+      }
+    } catch (e) {
+      console.error("Failed to check maintenance status", e);
+    } finally {
+      setIsLoadingMaintenance(false);
+    }
+  };
+
+  // Initialize auth from localStorage and check maintenance
   useEffect(() => {
     const savedToken = localStorage.getItem("smartadv_token");
     const savedUser = localStorage.getItem("smartadv_user");
@@ -54,6 +75,7 @@ export const AppProvider: FunctionComponent<{ children: ReactNode }> = ({ childr
       setToken(savedToken);
       setUser(JSON.parse(savedUser));
     }
+    checkMaintenance();
   }, []);
 
   // Fetch archive whenever token is loaded/changed
@@ -204,7 +226,10 @@ export const AppProvider: FunctionComponent<{ children: ReactNode }> = ({ childr
       logout,
       fetchArchive,
       deleteArchiveItem,
-      isLoadingArchive
+      isLoadingArchive,
+      isMaintenanceMode,
+      isLoadingMaintenance,
+      checkMaintenance
     }}>
       {children}
     </AppContext.Provider>

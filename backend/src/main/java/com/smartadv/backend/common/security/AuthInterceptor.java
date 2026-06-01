@@ -1,7 +1,9 @@
 package com.smartadv.backend.common.security;
 
 import com.smartadv.backend.domain.SessionToken;
+import com.smartadv.backend.domain.User;
 import com.smartadv.backend.repository.SessionTokenRepository;
+import com.smartadv.backend.controller.MaintenanceController;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
@@ -19,6 +21,37 @@ public class AuthInterceptor implements HandlerInterceptor {
     public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) throws Exception {
         // OPTIONS preflight requests are allowed without authorization
         if ("OPTIONS".equalsIgnoreCase(request.getMethod())) {
+            return true;
+        }
+
+        // Check if maintenance mode is active
+        if (MaintenanceController.isMaintenanceActive()) {
+            String authHeader = request.getHeader("Authorization");
+            boolean isAdmin = false;
+            SessionToken sessionToken = null;
+            if (authHeader != null && authHeader.startsWith("Bearer ")) {
+                String token = authHeader.substring(7);
+                sessionToken = sessionTokenRepository.findById(token).orElse(null);
+                if (sessionToken != null && !sessionToken.isExpired()) {
+                    User user = sessionToken.getUser();
+                    if ("ADMIN".equals(user.getRole())) {
+                        isAdmin = true;
+                        UserContext.setCurrentUser(user);
+                    }
+                }
+            }
+
+            if (!isAdmin) {
+                if (sessionToken != null && sessionToken.isExpired()) {
+                    sessionTokenRepository.delete(sessionToken);
+                }
+                response.setStatus(HttpStatus.SERVICE_UNAVAILABLE.value());
+                response.setContentType("application/json");
+                response.setCharacterEncoding("UTF-8");
+                response.getWriter().write("{\"error\": \"MaintenanceMode\", \"message\": \"Service is in maintenance.\"}");
+                return false;
+            }
+            
             return true;
         }
 

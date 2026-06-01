@@ -62,23 +62,27 @@ const NavigationRail1: FunctionComponent<NavigationRail1Type> = ({
   }, [menuFabPadding]);
 
   const navigate = useNavigate();
-  const { user, logout, token } = useAppContext();
+  const { user, logout, token, isMaintenanceMode, checkMaintenance } = useAppContext();
 
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [latestJob, setLatestJob] = useState<any>(null);
   const [isLoadingJob, setIsLoadingJob] = useState(false);
   const [clipMode, setClipMode] = useState<string>("AUTO");
   const [imageResolution, setImageResolution] = useState<string>("LOW");
+  
+  const [maintenanceActive, setMaintenanceActive] = useState(false);
+  const [isTogglingMaintenance, setIsTogglingMaintenance] = useState(false);
 
-  // Load clip mode and image resolution from localStorage when modal opens
+  // Load clip mode, image resolution, and maintenance status when modal opens
   useEffect(() => {
     if (isSettingsOpen) {
       const savedMode = localStorage.getItem("smartadv_clip_mode") || "AUTO";
       setClipMode(savedMode);
       const savedRes = localStorage.getItem("smartadv_image_resolution") || "LOW";
       setImageResolution(savedRes);
+      setMaintenanceActive(isMaintenanceMode);
     }
-  }, [isSettingsOpen]);
+  }, [isSettingsOpen, isMaintenanceMode]);
 
   const handleClipModeChange = (mode: string) => {
     setClipMode(mode);
@@ -88,6 +92,29 @@ const NavigationRail1: FunctionComponent<NavigationRail1Type> = ({
   const handleImageResolutionChange = (res: string) => {
     setImageResolution(res);
     localStorage.setItem("smartadv_image_resolution", res);
+  };
+
+  const handleMaintenanceToggle = async () => {
+    setIsTogglingMaintenance(true);
+    try {
+      const res = await fetch("/api/maintenance/toggle", {
+        method: "POST",
+        headers: token ? { "Authorization": `Bearer ${token}` } : {}
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setMaintenanceActive(data.enabled);
+        await checkMaintenance();
+      } else {
+        const err = await res.json();
+        alert(err.error || "점검 모드 전환에 실패했습니다.");
+      }
+    } catch (e) {
+      console.error("Failed to toggle maintenance mode", e);
+      alert("점검 모드 설정 중 오류가 발생했습니다.");
+    } finally {
+      setIsTogglingMaintenance(false);
+    }
   };
 
   const onSettingsClick = useCallback(() => {
@@ -403,6 +430,42 @@ const NavigationRail1: FunctionComponent<NavigationRail1Type> = ({
                         </div>
                       </div>
                     ))}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Administrator Section */}
+            {user && user.role === "ADMIN" && (
+              <div className="border-t border-slate-100 dark:border-slate-800/50 pt-4 mb-4">
+                <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500 mb-3 text-left">
+                  서비스 제어 설정 (ADMIN ONLY)
+                </h3>
+                <div className="bg-slate-50/50 dark:bg-slate-800/20 border border-slate-100 dark:border-slate-800/30 rounded-xl p-4 text-left mb-2">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <div className="text-xs font-bold text-slate-800 dark:text-slate-100">
+                        서비스 점검 모드 (Maintenance Mode)
+                      </div>
+                      <div className="text-[10px] text-slate-400 dark:text-slate-500 mt-1 leading-normal max-w-[240px]">
+                        활성화 시 일반 사용자의 접속이 차단되며, "점검 중" 안내 페이지가 노출됩니다.
+                      </div>
+                    </div>
+                    
+                    {/* iOS-style Toggle Switch */}
+                    <button
+                      disabled={isTogglingMaintenance}
+                      onClick={handleMaintenanceToggle}
+                      className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                        maintenanceActive ? "bg-rose-500" : "bg-slate-200 dark:bg-slate-800"
+                      } ${isTogglingMaintenance ? "opacity-50 cursor-not-allowed" : ""}`}
+                    >
+                      <span
+                        className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                          maintenanceActive ? "translate-x-5" : "translate-x-0"
+                        }`}
+                      />
+                    </button>
                   </div>
                 </div>
               </div>
