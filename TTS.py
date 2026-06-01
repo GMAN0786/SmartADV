@@ -170,8 +170,25 @@ async def _synthesize_with_edge_tts_async(text: str, output_path: Path, rate_per
     edge_tts = import_edge_tts()
     output_path.parent.mkdir(parents=True, exist_ok=True)
     rate_str = f"{rate_percent:+d}%"
-    communicate = edge_tts.Communicate(text=text, voice=EDGE_TTS_VOICE, rate=rate_str)
-    await communicate.save(str(output_path))
+    
+    max_retries = 5
+    backoff = 1.0
+    import random
+    
+    for attempt in range(1, max_retries + 1):
+        try:
+            communicate = edge_tts.Communicate(text=text, voice=EDGE_TTS_VOICE, rate=rate_str)
+            await communicate.save(str(output_path))
+            return  # Success!
+        except Exception as exc:
+            print(f"[TTS.py WARNING] Edge-TTS synthesis failed (attempt {attempt}/{max_retries}): {exc}", flush=True)
+            if attempt == max_retries:
+                print(f"[TTS.py ERROR] Edge-TTS synthesis completely failed after {max_retries} attempts.", flush=True)
+                raise exc
+            
+            sleep_time = backoff * (2 ** (attempt - 1)) + random.uniform(0.1, 1.0)
+            print(f"[TTS.py WARNING] Retrying in {sleep_time:.2f} seconds...", flush=True)
+            await asyncio.sleep(sleep_time)
 
 
 def synthesize_with_edge_tts(text: str, output_path: Path, speed: float = 1.0) -> None:
