@@ -40,3 +40,6 @@ Thumbs.db
 DEPLOY_EC2.md
 cookies.txt
 cookies-2.txt
+
+# Frontend build outputs
+/frontend/build/
