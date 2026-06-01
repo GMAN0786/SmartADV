@@ -332,6 +332,8 @@ def build_prompt_video(silences: Dict[int, SilenceInfo]) -> str:
         f"   window_duration에서 {TTS_MARGIN_SECONDS}초를 뺀 시간 안에 읽힐 분량으로 작성합니다.",
         "   (예: window 8.0초 → 최대 약 30음절 / window 5.0초 → 최대 약 18음절)",
         "5. 출력은 반드시 CSV만 반환합니다. 코드블록, 설명문, 마크다운을 절대 추가하지 않습니다.",
+        "6. 제공된 동영상에 대하여, 정확히 동영상 내에서 일어난 장면변화만을 묘사하세요. 장면간의 인과관계를 추축하지 마세요.",
+        "7. 한 동영상 클립을 시청하였을때, 가장 핵심적인 장면전환을 위주로 설명합니다.",
         "",
         "[출력 CSV 스키마]",
         "silence_id,scene_id,window_start,window_end,text",

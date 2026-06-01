@@ -254,7 +254,7 @@ def main():
 
     # STEP 1. ffmpeg를 통한 분석 오디오 추출
 
-    report_progress(2, "영상에서 오디오를 추출하는 중...")
+    report_progress(2, "영상에서 오디오를 추출하는 중입니다...")
     print("[1/5] 영상에서 오디오를 추출하는 중...")
 
     # Silero VAD는 16KHz 오디오를 가장 잘 인식하기에, 원본 소스를 16KHz로 리샘플링
@@ -265,7 +265,7 @@ def main():
 
     # STEP 2. Silero VAD 로드 및 음성(대사) 구간 탐지 (EC2 CPU 로컬 실행)
 
-    report_progress(8, "Silero VAD 모델 로드 및 대사 구간 탐지 중...")
+    report_progress(8, "Silero VAD 로드 및 대사 구간 탐지 중...")
     print("[2/5] Silero VAD 모델 로드 및 대사 구간 탐지 중...")
 
     # PyTorch Hub를 이용해 Silero VAD 모델 로드
@@ -312,20 +312,24 @@ def main():
 
         # 이전 대사가 끝난 시간(current_time)보다 다음 대사가 늦게 시작한다면, 그 사이가 무음 구간
         if start_speech > current_time:
-            silence_timestamps.append({'start': current_time, 'end': start_speech})
+            # 오디오 덕킹 적극 활용을 위해 대사 구간과 앞뒤로 각각 1.0초씩(총 2.0초) 겹치도록 확장
+            extended_start = max(0.0, current_time - 1.0)
+            extended_end = min(total_duration, start_speech + 1.0)
+            silence_timestamps.append({'start': extended_start, 'end': extended_end})
 
         # 탐색 위치를 방금 끝난 대사의 종료 시간으로 업데이트
         current_time = end_speech
 
     # 영상 맨 마지막에 남은 꼬리 부분도 무음 구간으로 처리
     if current_time < total_duration:
-        silence_timestamps.append({'start': current_time, 'end': total_duration})
+        extended_start = max(0.0, current_time - 1.0)
+        silence_timestamps.append({'start': extended_start, 'end': total_duration})
 
     # STEP 4. FFmpeg로 무음 구간 원본 영상에서 잘라내기 및 장면 분석
 
     # Pass 0: 전체 비디오(원본) 대상 글로벌 장면 전환 분석 (딱 1회)
-    report_progress(18, "전체 비디오에서 글로벌 장면 전환 분석 중...")
-    print(" -> [글로벌 분석] 전체 비디오 대상 글로벌 장면 감지 수행 중...")
+    report_progress(18, "장면 전환 감지 중...")
+    print(" -> 장면 전환 감지 수행 중...")
     global_scene_times = detect_scene_changes(
         INPUT_FILE,
         threshold=SCENE_THRESHOLD,
@@ -530,7 +534,7 @@ def main():
 
     # STEP 5. Modal GPU — 모든 context audio 클립 병렬 STT
 
-    report_progress(28, "Modal GPU에서 병렬 음성 인식 전사 중...")
+    report_progress(28, "Modal GPU에서 전후 맥락 음성 전사 수행...")
     print("[5/5] Modal GPU에서 한국어 음성 전사 중...")
 
     # STT를 돌릴 (summary_index, side_key, audio_path) 목록 수집
@@ -568,7 +572,7 @@ def main():
     if os.path.exists(TEMP_WAV):
         os.remove(TEMP_WAV)
 
-    report_progress(33, "전처리 엔진 완료")
+    report_progress(33, "영상 전처리 완료")
     print("\n모든 작업이 완료되었습니다")
 
     # [모니터링 종료 및 결과 출력]
