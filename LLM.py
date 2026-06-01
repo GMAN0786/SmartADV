@@ -37,6 +37,7 @@ GEMINI_FILE_POLL_INTERVAL_SECONDS = float(os.getenv("GEMINI_FILE_POLL_INTERVAL_S
 GEMINI_FILE_POLL_TIMEOUT_SECONDS = float(os.getenv("GEMINI_FILE_POLL_TIMEOUT_SECONDS", "60.0"))
 GEMINI_TIMEOUT_SECONDS = int(os.getenv("GEMINI_TIMEOUT_SECONDS", "180"))
 GEMINI_MAX_RETRIES = int(os.getenv("GEMINI_MAX_RETRIES", "5"))
+GEMINI_IMAGE_RESOLUTION = os.getenv("GEMINI_IMAGE_RESOLUTION", "UNSPECIFIED").strip().upper()
 
 TTS_SYLLABLES_PER_SECOND = 4   # TTS 초당 발화 음절 수
 TTS_MARGIN_SECONDS = 0.5        # 해설 분량 계산 시 여유 시간 (초)
@@ -47,7 +48,7 @@ if LLM_MODE_PATH.exists():
     LLM_MODE = LLM_MODE_PATH.read_text(encoding="utf-8").strip()
 else:
     LLM_MODE = "IMAGE"
-print(f"[설정] llm_mode: {LLM_MODE}")
+print(f"[설정] llm_mode: {LLM_MODE}, gemini_image_resolution: {GEMINI_IMAGE_RESOLUTION}")
 
 
 # ===== 데이터 구조 =====
@@ -787,20 +788,34 @@ def call_gemini_for_batch(client, prompt: str, silences: Dict[int, SilenceInfo],
     completion_tokens = 0
     total_tokens = 0
 
+    # 이미지 모드이고 GEMINI_IMAGE_RESOLUTION 설정이 LOW/MEDIUM/HIGH 중 하나인 경우 media_resolution 매핑 적용
+    media_resolution = None
+    if mode == "IMAGE":
+        if GEMINI_IMAGE_RESOLUTION == "LOW":
+            media_resolution = "MEDIA_RESOLUTION_LOW"
+        elif GEMINI_IMAGE_RESOLUTION == "MEDIUM":
+            media_resolution = "MEDIA_RESOLUTION_MEDIUM"
+        elif GEMINI_IMAGE_RESOLUTION == "HIGH":
+            media_resolution = "MEDIA_RESOLUTION_HIGH"
+
     try:
         for attempt in range(1, max_retries + 1):
             try:
                 print(f"[Gemini Batch {batch_num}/{total_batches}] 대본 요청 시작 (시도 {attempt}/{max_retries})")
+
+                config_args = {
+                    "temperature": 0.2,
+                    "response_mime_type": "text/plain",
+                }
+                if media_resolution:
+                    config_args["media_resolution"] = media_resolution
 
                 with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
                     future = executor.submit(
                         client.models.generate_content,
                         model=GEMINI_MODEL,
                         contents=contents,
-                        config=types.GenerateContentConfig(
-                            temperature=0.2,
-                            response_mime_type="text/plain",
-                        ),
+                        config=types.GenerateContentConfig(**config_args),
                     )
                     try:
                         response = future.result(timeout=GEMINI_TIMEOUT_SECONDS)
