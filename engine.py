@@ -491,15 +491,20 @@ def main():
                 else:
                     window_end = end
 
+                # 전후 맥락 1.5초 패딩 추가 (인과관계 왜곡 및 할루시네이션 방지)
+                padding = 1.5
+                padded_start = max(0.0, first_cut - padding)
+                padded_end = min(total_duration, window_end + padding)
+
                 # 비디오 슬라이싱 최대 1080p 고화질 온더플라이 리사이징 추출
                 # 원본 세로 해상도가 1080보다 크면 1080p로 리사이징하고, 작으면 원본 비율을 유지하도록 -2:min(1080,ih) 필터 사용.
                 vid_out = os.path.join(OUTPUT_DIR, f"silence{clip_count:03d}_scene{scene_idx:03d}.mp4")
-                print(f"   -> scene{scene_idx:03d} 비디오 추출 중 ({first_cut:.2f}초 ~ {window_end:.2f}초, 길이: {window_end - first_cut:.2f}초) -> {vid_out}")
+                print(f"   -> scene{scene_idx:03d} 비디오 오버랩 패딩 추출 중 ({padded_start:.2f}초 ~ {padded_end:.2f}초, 원래: {first_cut:.2f}초 ~ {window_end:.2f}초) -> {vid_out}")
                 
                 subprocess.run([
                     "ffmpeg", "-y",
-                    "-ss", str(first_cut),
-                    "-to", str(window_end),
+                    "-ss", str(padded_start),
+                    "-to", str(padded_end),
                     "-i", INPUT_FILE,
                     "-vf", "scale=-2:min(1080\\,ih)",
                     "-c:v", "libx264",
