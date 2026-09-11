@@ -1,119 +1,88 @@
-import { useEffect } from "react";
-import {
-  Routes,
-  Route,
-  useNavigationType,
-  useLocation,
-  Navigate,
-} from "react-router-dom";
-import DragDrop from "./pages/DragDrop";
-import View from "./pages/View";
-import Download from "./pages/Download";
-import Main from "./pages/Main";
-import ProgressPage from "./pages/ProgressPage";
-import Registeration from "./pages/Registeration";
-import Login from "./pages/Login";
-import Archive from "./pages/Archive";
-import Likes from "./pages/Likes";
-import { useAppContext } from "./context/AppContext";
+import { Navigate, Route, Routes } from 'react-router-dom';
+import { AppShell } from './components/AppShell';
+import { RequireAuth } from './components/RequireAuth';
+import { ArchiveScreen } from './screens/ArchiveScreen';
+import { DoneScreen } from './screens/DoneScreen';
+import { HomeScreen } from './screens/HomeScreen';
+import { LoginScreen } from './screens/LoginScreen';
+import { PlayerScreen } from './screens/PlayerScreen';
+import { ProcessingScreen } from './screens/ProcessingScreen';
+import { SettingsScreen } from './screens/SettingsScreen';
+import { UrlScreen } from './screens/UrlScreen';
 
-// Protected route wrapper
-const ProtectedRoute = ({ children }: { children: JSX.Element }) => {
-  const { token } = useAppContext();
-  const savedToken = token || localStorage.getItem("smartadv_token");
-  if (!savedToken) {
-    return <Navigate to="/login" replace />;
-  }
-  return children;
-};
-
-function App() {
-  const action = useNavigationType();
-  const location = useLocation();
-  const pathname = location.pathname;
-
-  useEffect(() => {
-    if (action !== "POP") {
-      window.scrollTo(0, 0);
-    }
-  }, [action, pathname]);
-
-  useEffect(() => {
-    let title = "";
-    let metaDescription = "";
-
-    switch (pathname) {
-      case "/":
-        title = "SmartADV - Upload";
-        metaDescription = "AI기반 화면해설 방송 자동 생성 솔루션";
-        break;
-      case "/url":
-      case "/examplesmain":
-        title = "SmartADV - URL Input";
-        metaDescription = "URL로 영상 해설 생성";
-        break;
-      case "/view":
-      case "/examplesview":
-        title = "SmartADV - View";
-        metaDescription = "영상 시청";
-        break;
-      case "/download":
-      case "/examplesdownload":
-        title = "SmartADV - Download";
-        metaDescription = "해설 오디오 다운로드";
-        break;
-      case "/login":
-      case "/exampleslogin":
-        title = "SmartADV - Login";
-        metaDescription = "로그인";
-        break;
-      case "/register":
-      case "/examplesregisteration":
-        title = "SmartADV - Register";
-        metaDescription = "회원가입";
-        break;
-      case "/archive":
-        title = "SmartADV - Archive";
-        metaDescription = "요청 기록";
-        break;
-      case "/likes":
-        title = "SmartADV - Likes";
-        metaDescription = "좋아요 목록";
-        break;
-    }
-
-    if (title) {
-      document.title = title;
-    }
-
-    if (metaDescription) {
-      const metaDescriptionTag: HTMLMetaElement | null = document.querySelector(
-        'head > meta[name="description"]',
-      );
-      if (metaDescriptionTag) {
-        metaDescriptionTag.content = metaDescription;
-      }
-    }
-  }, [pathname]);
-
+/**
+ * 화면 하나가 주소 하나.
+ *
+ * 시안은 `screen` 상태 하나로 화면을 갈랐지만, 웹에서는 새로고침·뒤로 가기·
+ * 링크 공유가 모두 주소를 통해 이뤄진다. 작업 진행과 재생처럼 대상이 있는
+ * 화면은 videoId 를 주소에 실어 어디서든 그 화면으로 바로 들어올 수 있다.
+ */
+export default function App() {
   return (
     <Routes>
-      <Route path="/" element={<ProtectedRoute><DragDrop /></ProtectedRoute>} />
-      <Route path="/url" element={<ProtectedRoute><Main /></ProtectedRoute>} />
-      <Route path="/progress" element={<ProtectedRoute><ProgressPage /></ProtectedRoute>} />
-      <Route path="/view" element={<ProtectedRoute><View /></ProtectedRoute>} />
-      <Route path="/download" element={<ProtectedRoute><Download /></ProtectedRoute>} />
-      <Route path="/login" element={<Login />} />
-      <Route path="/register" element={<Registeration />} />
-      <Route path="/archive" element={<ProtectedRoute><Archive /></ProtectedRoute>} />
-      <Route path="/likes" element={<ProtectedRoute><Likes /></ProtectedRoute>} />
-      {/* Legacy routes for backward compatibility */}
-      <Route path="/examplesview" element={<ProtectedRoute><View /></ProtectedRoute>} />
-      <Route path="/examplesdownload" element={<ProtectedRoute><Download /></ProtectedRoute>} />
-      <Route path="/examplesmain" element={<ProtectedRoute><Main /></ProtectedRoute>} />
-      <Route path="/examplesregisteration" element={<Registeration />} />
-      <Route path="/exampleslogin" element={<Login />} />
+      <Route element={<AppShell />}>
+        <Route path="/login" element={<LoginScreen />} />
+
+        <Route
+          path="/home"
+          element={
+            <RequireAuth>
+              <HomeScreen />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/url"
+          element={
+            <RequireAuth>
+              <UrlScreen />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/processing/:videoId"
+          element={
+            <RequireAuth>
+              <ProcessingScreen />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/done/:videoId"
+          element={
+            <RequireAuth>
+              <DoneScreen />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/player/:videoId"
+          element={
+            <RequireAuth>
+              <PlayerScreen />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/archive"
+          element={
+            <RequireAuth>
+              <ArchiveScreen />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/settings"
+          element={
+            <RequireAuth>
+              <SettingsScreen />
+            </RequireAuth>
+          }
+        />
+
+        <Route path="/" element={<Navigate to="/home" replace />} />
+        <Route path="*" element={<Navigate to="/home" replace />} />
+      </Route>
     </Routes>
   );
 }
-export default App;

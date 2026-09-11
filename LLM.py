@@ -1,21 +1,13 @@
 import csv
-import concurrent.futures
 import io
 import os
 import re
-import time
 from dotenv import load_dotenv
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-from google import genai
-from google.genai import types
-
-
-def report_progress(pct: int, message: str):
-    """PROGRESS:XX:message 형식으로 stdout에 출력하여 Java 백엔드에 세부 진행률을 전달합니다."""
-    print(f"PROGRESS:{pct}:{message}", flush=True)
+from providers import SceneImages, VLMRequest, describe_providers, get_vlm, report_progress
 
 
 # ===== 설정 =====
@@ -26,17 +18,11 @@ SILENCE_SUMMARY_PATH = OUTPUT_DIR / "silence_summary.txt"
 STT_SUMMARY_PATH = OUTPUT_DIR / "stt_summary.txt"
 
 CONTEXT_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3-flash-preview")
-LLM_RAW_OUTPUT_PATH = OUTPUT_DIR / "gemini_ad_raw.txt"
-LLM_CSV_OUTPUT_PATH = OUTPUT_DIR / "gemini_ad_script.csv"
-LLM_TXT_OUTPUT_PATH = OUTPUT_DIR / "gemini_ad_script.txt"
 
-GEMINI_CLEAR_FILES_BEFORE_REQUEST = os.getenv("GEMINI_CLEAR_FILES_BEFORE_REQUEST", "1") == "1"
-GEMINI_DELETE_UPLOADED_FILES_AFTER_REQUEST = os.getenv("GEMINI_DELETE_UPLOADED_FILES_AFTER_REQUEST", "1") == "1"
-GEMINI_FILE_POLL_INTERVAL_SECONDS = float(os.getenv("GEMINI_FILE_POLL_INTERVAL_SECONDS", "2.0"))
-GEMINI_FILE_POLL_TIMEOUT_SECONDS = float(os.getenv("GEMINI_FILE_POLL_TIMEOUT_SECONDS", "60.0"))
-GEMINI_TIMEOUT_SECONDS = int(os.getenv("GEMINI_TIMEOUT_SECONDS", "180"))
-GEMINI_MAX_RETRIES = int(os.getenv("GEMINI_MAX_RETRIES", "5"))
+# 어느 모델이 대본을 쓰든 결과 파일 이름은 같다. providers/ 를 보라.
+LLM_RAW_OUTPUT_PATH = OUTPUT_DIR / "ad_raw.txt"
+LLM_CSV_OUTPUT_PATH = OUTPUT_DIR / "ad_script.csv"
+LLM_TXT_OUTPUT_PATH = OUTPUT_DIR / "ad_script.txt"
 
 TTS_SYLLABLES_PER_SECOND = 4   # TTS 초당 발화 음절 수
 TTS_MARGIN_SECONDS = 0.5        # 해설 분량 계산 시 여유 시간 (초)
@@ -288,87 +274,22 @@ def build_prompt(silences: Dict[int, SilenceInfo]) -> str:
     return prompt
 
 
-def build_multimodal_contents(prompt: str, silences: Dict[int, SilenceInfo], client) -> Tuple[List[object], List[str]]:
-    """프롬프트 텍스트 뒤에 scene별로 [scene 라벨 텍스트 → 해당 이미지들]을 교차 배치합니다.
-    이렇게 하면 Gemini가 어떤 이미지가 어떤 scene에 속하는지 정확히 알 수 있습니다."""
-    contents: List[object] = [prompt]
-    uploaded_file_names: List[str] = []
+def build_scene_images(silences: Dict[int, SilenceInfo]) -> List[SceneImages]:
+    """scene 마다 [라벨 + 키프레임 목록] 하나를 만든다.
 
-    # 총 이미지 수 미리 계산 (진행률 표시용)
-    total_images = sum(
-        1 for silence in silences.values()
-        for scene in silence.scenes
-        for img_path in scene.images if img_path.exists()
-    )
-    print(f"[프롬프트] Files API 업로드 시작: 총 이미지 {total_images}개")
-    report_progress(45, f"Gemini에 키프레임 이미지 {total_images}장 업로드 시작...")
-
-    img_idx = 0
+    라벨을 붙여 두는 이유는 어떤 이미지가 어떤 scene 의 것인지 모델이 헷갈리지
+    않게 하기 위해서다. 이미지를 어떻게 실어 보낼지(원격 업로드냐 base64 냐)는
+    provider 가 알아서 하고, 여기서는 관여하지 않는다.
+    """
+    scenes: List[SceneImages] = []
     for silence_id in sorted(silences):
         silence = silences[silence_id]
         for scene in silence.scenes:
-            existing_images = [p for p in scene.images if p.exists()]
-            if not existing_images:
-                continue
-            # scene 라벨을 텍스트로 삽입하여 이미지 구분
-            contents.append(f"[silence{silence.silence_id:03d} scene{scene.scene_id:03d} 이미지]")
-            for image_path in existing_images:
-                img_idx += 1
-                upload_pct = 45 + int((img_idx / total_images) * 13) if total_images > 0 else 45
-                report_progress(upload_pct, f"이미지 업로드 중 ({img_idx}/{total_images}): {image_path.name}")
-                print(f"[Files API] 업로드 중 ({img_idx}/{total_images}): {image_path.name}")
-                uploaded_file = upload_gemini_file(client, image_path)
-                contents.append(uploaded_file)
-                uploaded_file_names.append(uploaded_file.name)
-                print(f"[Files API] 업로드 완료 ({img_idx}/{total_images}): {image_path.name} -> {uploaded_file.name}")
-
-    report_progress(58, "이미지 업로드 완료! Gemini AI 응답 대기 중...")
-    print(f"[프롬프트] Files API 업로드 완료: scene별 교차 배치, 원격 이미지 {total_images}개")
-    return contents, uploaded_file_names
-
-
-def upload_gemini_file(client, file_path: Path):
-    """단일 이미지를 Gemini Files API에 업로드하고 ACTIVE 상태가 될 때까지 대기합니다."""
-    uploaded_file = client.files.upload(file=str(file_path))
-    print(f"[Files API] 원격 처리 대기 시작: {file_path.name} -> {uploaded_file.name}")
-    deadline = time.time() + GEMINI_FILE_POLL_TIMEOUT_SECONDS
-    last_logged_state = None
-
-    while time.time() < deadline:
-        current = client.files.get(name=uploaded_file.name)
-        state = getattr(current, "state", None)
-        state_name = getattr(state, "name", str(state)) if state is not None else "UNKNOWN"
-
-        if state_name != last_logged_state:
-            print(f"[Files API] 상태 변경: {file_path.name} -> {state_name}")
-            last_logged_state = state_name
-
-        if state_name == "ACTIVE":
-            return current
-        if state_name == "FAILED":
-            raise RuntimeError(f"Gemini Files API 처리 실패: {file_path} -> {uploaded_file.name}")
-
-        time.sleep(GEMINI_FILE_POLL_INTERVAL_SECONDS)
-
-    raise TimeoutError(f"Gemini Files API 활성화 대기 타임아웃: {file_path} -> {uploaded_file.name}")
-
-
-def delete_uploaded_gemini_files(client, file_names: List[str]) -> None:
-    """이번 요청에서 업로드한 Gemini Files API 파일만 정리합니다."""
-    if not GEMINI_DELETE_UPLOADED_FILES_AFTER_REQUEST:
-        print("[Gemini] 요청 후 업로드 파일 삭제 생략 설정됨")
-        return
-
-    deleted_count = 0
-    failed_count = 0
-    for file_name in file_names:
-        try:
-            client.files.delete(name=file_name)
-            deleted_count += 1
-        except Exception:
-            failed_count += 1
-
-    print(f"[Gemini] 요청 후 업로드 파일 정리 완료: 삭제 {deleted_count}개, 실패 {failed_count}개")
+            scenes.append(SceneImages(
+                label=f"[silence{silence.silence_id:03d} scene{scene.scene_id:03d} 이미지]",
+                paths=list(scene.images),
+            ))
+    return scenes
 
 
 def strip_code_fence(text: str) -> str:
@@ -387,7 +308,7 @@ def normalize_csv_text(csv_text: str) -> str:
     cleaned = strip_code_fence(csv_text)
     rows = list(csv.reader(io.StringIO(cleaned)))
     if not rows:
-        raise ValueError("Gemini 응답에서 CSV를 찾지 못했습니다.")
+        raise ValueError("모델 응답에서 CSV를 찾지 못했습니다.")
 
     expected_header = ["silence_id", "scene_id", "window_start", "window_end", "text"]
     header = [cell.strip() for cell in rows[0]]
@@ -432,93 +353,6 @@ def csv_to_txt(csv_text: str) -> str:
     return "\n".join(blocks).strip() + "\n"
 
 
-def cleanup_gemini_files(client) -> None:
-    """요청 시작 전에 Gemini Files API에 남아 있는 이전 업로드 파일들을 정리합니다."""
-    if not GEMINI_CLEAR_FILES_BEFORE_REQUEST:
-        print("[Gemini] Files API 사전 정리 생략 설정됨")
-        return
-
-    print("[Gemini] Files API 사전 정리 시작")
-    deleted_count = 0
-    failed_count = 0
-    listed_count = 0
-
-    try:
-        for file_obj in client.files.list():
-            listed_count += 1
-            file_name = getattr(file_obj, "name", None)
-            if not file_name:
-                continue
-            try:
-                client.files.delete(name=file_name)
-                deleted_count += 1
-                print(f"[Gemini] 이전 업로드 파일 삭제: {file_name}")
-            except Exception as exc:
-                failed_count += 1
-                print(f"[Gemini] 이전 업로드 파일 삭제 실패: {file_name} | {exc}")
-
-        print(f"[Gemini] Files API 사전 정리 완료: 조회 {listed_count}개, 삭제 {deleted_count}개, 실패 {failed_count}개")
-    except Exception as exc:
-        print(f"[Gemini] Files API 목록 조회/정리 실패: {exc}")
-
-
-def call_gemini(prompt: str, silences: Dict[int, SilenceInfo]) -> str:
-    api_key = os.getenv("GEMINI_API_KEY")
-    if not api_key:
-        raise EnvironmentError("GEMINI_API_KEY 환경변수가 설정되어 있지 않습니다.")
-
-    client = genai.Client(api_key=api_key)
-    cleanup_gemini_files(client)
-    contents, uploaded_file_names = build_multimodal_contents(prompt, silences, client)
-
-    max_retries = GEMINI_MAX_RETRIES
-    last_error = None
-
-    try:
-        for attempt in range(1, max_retries + 1):
-            try:
-                report_progress(58, f"Gemini AI 응답 대기 중... (시도 {attempt}/{max_retries})")
-                print(f"[Gemini] 요청 시작: model={GEMINI_MODEL} (시도 {attempt}/{max_retries}, 타임아웃 {GEMINI_TIMEOUT_SECONDS}초)")
-
-                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-                    future = executor.submit(
-                        client.models.generate_content,
-                        model=GEMINI_MODEL,
-                        contents=contents,
-                        config=types.GenerateContentConfig(
-                            temperature=0.2,
-                            response_mime_type="text/plain",
-                        ),
-                    )
-                    try:
-                        response = future.result(timeout=GEMINI_TIMEOUT_SECONDS)
-                    except concurrent.futures.TimeoutError:
-                        raise TimeoutError(f"Gemini API 응답 {GEMINI_TIMEOUT_SECONDS}초 타임아웃 (503 UNAVAILABLE)")
-
-                print("[Gemini] 응답 수신 완료")
-                if not response.text:
-                    raise ValueError("Gemini 응답 텍스트가 비어 있습니다.")
-                return response.text
-
-            except Exception as e:
-                last_error = e
-                error_str = str(e)
-                is_retryable = any(kw in error_str for kw in [
-                    "503", "UNAVAILABLE", "429", "RESOURCE_EXHAUSTED", "500", "INTERNAL", "Timeout", "타임아웃"
-                ])
-                if is_retryable and attempt < max_retries:
-                    wait_sec = 30 * attempt
-                    report_progress(58, f"서버 과부하/타임아웃! {wait_sec}초 후 재시도... ({attempt}/{max_retries})")
-                    print(f"[Gemini] 재시도 사유: ({error_str[:80]}...). {wait_sec}초 후 재시도합니다.")
-                    time.sleep(wait_sec)
-                else:
-                    raise
-
-        raise last_error
-    finally:
-        delete_uploaded_gemini_files(client, uploaded_file_names)
-
-
 def load_all_inputs() -> Dict[int, SilenceInfo]:
     print("[1/4] 입력 파일 파싱 시작")
     silences = parse_silence_summary(SILENCE_SUMMARY_PATH)
@@ -532,6 +366,7 @@ def load_all_inputs() -> Dict[int, SilenceInfo]:
 
 def main() -> None:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    print(f"[provider] {describe_providers()}")
 
     report_progress(35, "전처리 결과 파일 파싱 중...")
     silences = load_all_inputs()
@@ -539,15 +374,16 @@ def main() -> None:
     if not silences:
         raise ValueError("처리할 무음구간 데이터가 없습니다.")
 
-    report_progress(40, "Gemini 프롬프트 구성 중...")
-    print("[3/4] Gemini 프롬프트 생성 시작")
-    prompt = build_prompt(silences)
-    print("[3/4] Gemini 프롬프트 생성 완료")
+    report_progress(40, "해설 대본 프롬프트 구성 중...")
+    print("[3/4] 프롬프트 생성 시작")
+    request = VLMRequest(prompt=build_prompt(silences), scenes=build_scene_images(silences))
+    print(f"[3/4] 프롬프트 생성 완료: 이미지 {request.image_count()}장")
 
-    report_progress(45, "Gemini AI에 해설 대본 요청 중... (최대 수 분 소요)")
-    print("[4/4] Gemini 호출 시작")
-    raw_response = call_gemini(prompt, silences)
-    print(f"[4/4] Gemini 호출 완료: 응답 {len(raw_response)}자")
+    provider = get_vlm()
+    report_progress(45, "AI에 해설 대본 요청 중... (최대 수 분 소요)")
+    print(f"[4/4] {provider.name} 호출 시작")
+    raw_response = provider.generate(request)
+    print(f"[4/4] {provider.name} 호출 완료: 응답 {len(raw_response)}자")
 
     report_progress(60, "AI 응답 후처리 및 대본 저장 중...")
     LLM_RAW_OUTPUT_PATH.write_text(raw_response, encoding="utf-8")
@@ -559,9 +395,9 @@ def main() -> None:
     print("[저장] 응답 후처리 및 파일 저장 완료")
 
     report_progress(66, "해설 대본 생성 완료")
-    print(f"Gemini 원본 응답 저장: {LLM_RAW_OUTPUT_PATH}")
-    print(f"Gemini CSV 저장: {LLM_CSV_OUTPUT_PATH}")
-    print(f"Gemini TXT 저장: {LLM_TXT_OUTPUT_PATH}")
+    print(f"원본 응답 저장: {LLM_RAW_OUTPUT_PATH}")
+    print(f"CSV 저장: {LLM_CSV_OUTPUT_PATH}")
+    print(f"TXT 저장: {LLM_TXT_OUTPUT_PATH}")
 
 
 if __name__ == "__main__":

@@ -2,23 +2,21 @@ import csv
 import os
 import shutil
 import subprocess
-import asyncio
 from dotenv import load_dotenv
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Tuple
 
+from providers import describe_providers, get_tts, report_progress
+
 load_dotenv()
-
-
-def report_progress(pct: int, message: str):
-    """PROGRESS:XX:message 형식으로 stdout에 출력하여 Java 백엔드에 세부 진행률을 전달합니다."""
-    print(f"PROGRESS:{pct}:{message}", flush=True)
 
 BASE_DIR = Path(__file__).resolve().parent
 OUTPUT_DIR = Path(os.getenv("SMARTADV_OUTPUT", BASE_DIR / "output_clips"))
 INPUT_VIDEO_PATH = Path(os.getenv("SMARTADV_INPUT", BASE_DIR / "input.mp4"))
-LLM_CSV_PATH = OUTPUT_DIR / "gemini_ad_script.csv"
+LLM_CSV_PATH = OUTPUT_DIR / "ad_script.csv"
+# 이름을 바꾸기 전에 만들어 둔 작업 폴더도 그대로 읽힌다.
+LEGACY_LLM_CSV_PATH = OUTPUT_DIR / "gemini_ad_script.csv"
 
 TTS_SEGMENTS_DIR = OUTPUT_DIR / "tts_segments"
 TTS_TIMELINE_PATH = OUTPUT_DIR / "tts_timeline.csv"
@@ -26,9 +24,8 @@ NARRATION_MIX_PATH = OUTPUT_DIR / "ad_narration_mix.wav"
 FINAL_VIDEO_PATH = OUTPUT_DIR / "input_with_ad.mp4"
 FINAL_AUDIO_PATH = OUTPUT_DIR / "input_with_ad_audio.m4a"
 
-# Edge TTS 설정
-EDGE_TTS_VOICE = os.getenv("EDGE_TTS_VOICE", "ko-KR-SunHiNeural")
-BASE_TTS_SPEED = float(os.getenv("EDGE_TTS_SPEED", "1.0"))
+# 합성 기본 속도. 목소리·엔진별 설정은 providers/ 안에 있다.
+BASE_TTS_SPEED = float(os.getenv("TTS_BASE_SPEED", os.getenv("EDGE_TTS_SPEED", "1.0")))
 
 # 합성 관련 설정
 TTS_START_OFFSET_MS = 300            # scene 시작 시점 + 0.3초 후에 오디오 시작
@@ -154,29 +151,21 @@ def run_ffmpeg(cmd: List[str]) -> None:
     subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
-# ===== Edge TTS =====
-def import_edge_tts():
-    try:
-        import edge_tts  # type: ignore
-    except Exception as exc:
-        raise ImportError(
-            "edge-tts가 설치되어 있지 않거나 불러올 수 없습니다. "
-            "`pip install edge-tts` 후 다시 실행하세요."
-        ) from exc
-    return edge_tts
+# ===== 해설 음성 =====
+def synthesize(text: str, output_path: Path, speed: float = 1.0) -> None:
+    """설정된 TTS provider 로 문장 하나를 음성 파일로 만든다."""
+    _tts_provider().synthesize(text, output_path, speed)
 
 
-async def _synthesize_with_edge_tts_async(text: str, output_path: Path, rate_percent: int) -> None:
-    edge_tts = import_edge_tts()
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    rate_str = f"{rate_percent:+d}%"
-    communicate = edge_tts.Communicate(text=text, voice=EDGE_TTS_VOICE, rate=rate_str)
-    await communicate.save(str(output_path))
+_PROVIDER = None
 
 
-def synthesize_with_edge_tts(text: str, output_path: Path, speed: float = 1.0) -> None:
-    rate_percent = int(round((speed - 1.0) * 100))
-    asyncio.run(_synthesize_with_edge_tts_async(text, output_path, rate_percent))
+def _tts_provider():
+    """엔진을 한 번만 준비해 두고 모든 문장에 다시 쓴다."""
+    global _PROVIDER
+    if _PROVIDER is None:
+        _PROVIDER = get_tts()
+    return _PROVIDER
 
 
 # ===== atempo 배속 =====
@@ -189,18 +178,31 @@ def apply_atempo(src_path: Path, dst_path: Path, speed: float) -> None:
     ])
 
 
+def copy_as_wav(src_path: Path, dst_path: Path) -> None:
+    """뒷단(ffmpeg 믹싱)이 기대하는 wav 로 맞춘다.
+
+    Edge TTS 는 이미 wav 라 그냥 복사한다. mp3 로 내놓는 로컬 엔진이라면
+    여기서 한 번 옮긴다 — 배속이 필요 없을 때도 형식은 맞춰 두어야 한다.
+    """
+    if src_path.suffix.lower() == ".wav":
+        shutil.copy2(src_path, dst_path)
+        return
+    run_ffmpeg(["ffmpeg", "-y", "-i", str(src_path), str(dst_path)])
+
+
 # ===== 세그먼트 음성 생성 =====
 def generate_tts_segments(rows: List[ADScriptRow]) -> List[GeneratedSegment]:
     """각 scene의 해설 오디오를 생성하고, window_end에 오디오 끝이 맞도록 start_ms를 계산합니다."""
-    print(f"Edge TTS voice 사용: {EDGE_TTS_VOICE}")
+    provider = _tts_provider()
+    print(f"TTS provider: {getattr(provider, 'describe', lambda: provider.name)()}")
 
     generated: List[GeneratedSegment] = []
     for row in rows:
-        raw_path = TTS_SEGMENTS_DIR / f"silence_{row.silence_id:03d}_scene_{row.scene_id:03d}_raw.wav"
+        raw_path = TTS_SEGMENTS_DIR / f"silence_{row.silence_id:03d}_scene_{row.scene_id:03d}_raw{provider.audio_suffix}"
         final_path = TTS_SEGMENTS_DIR / f"silence_{row.silence_id:03d}_scene_{row.scene_id:03d}.wav"
 
-        # 기본 속도로 TTS 생성
-        synthesize_with_edge_tts(row.text, raw_path, BASE_TTS_SPEED)
+        # 기본 속도로 음성 생성
+        synthesize(row.text, raw_path, BASE_TTS_SPEED)
         raw_duration = get_media_duration_seconds(raw_path)
 
         # 실제 가용 시간 = window_duration - 0.3초(시작 오프셋)
@@ -217,7 +219,7 @@ def generate_tts_segments(rows: List[ADScriptRow]) -> List[GeneratedSegment]:
                 f"(원본 {raw_duration:.3f}s → {final_duration:.3f}s, 가용 {available_duration:.3f}s)"
             )
         else:
-            shutil.copy2(raw_path, final_path)
+            copy_as_wav(raw_path, final_path)
             atempo_speed = 1.0
             final_duration = raw_duration
 
@@ -354,13 +356,15 @@ def render_narration_and_final_mix(input_video_path: Path, segments: List[Genera
 
 def main() -> None:
     ensure_ffmpeg_installed()
+    print(f"[provider] {describe_providers()}")
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     TTS_SEGMENTS_DIR.mkdir(parents=True, exist_ok=True)
 
     report_progress(68, "해설 대본 CSV 로드 중...")
-    rows = load_ad_rows(LLM_CSV_PATH)
+    csv_path = LLM_CSV_PATH if LLM_CSV_PATH.exists() else LEGACY_LLM_CSV_PATH
+    rows = load_ad_rows(csv_path)
     if not rows:
-        raise ValueError("TTS로 변환할 해설 문장이 없습니다. gemini_ad_script.csv를 확인하세요.")
+        raise ValueError(f"TTS로 변환할 해설 문장이 없습니다. {csv_path.name}를 확인하세요.")
 
     report_progress(72, f"{len(rows)}개 해설 문장 TTS 음성 합성 중...")
     segments = generate_tts_segments(rows)
