@@ -16,9 +16,9 @@ import glob
 # 파이토치 임포트 (Silero VAD EC2 로컬 실행용)
 import torch
 
-# Modal GPU 워커 호출 - STT 전용 (modal_workers.py 참고)
-# 사전 조건: modal deploy modal_workers.py 로 배포 완료 필요
-import modal
+# 음성 인식은 providers/ 를 거친다. Modal GPU 와 이 컴퓨터의 whisper 중
+# STT_PROVIDER 환경변수가 고르는 쪽이 쓰인다.
+from providers import describe_providers, get_stt
 from pathlib import Path
 
 
@@ -239,10 +239,9 @@ def main():
         os.remove(old_img)
     print("[정리] 이전 scene 이미지 삭제 완료")
 
-    # Modal GPU 워커 참조 (STT 전용)
-    # modal deploy modal_workers.py 로 배포한 함수를 이름으로 조회합니다.
-    # MODAL_TOKEN_ID / MODAL_TOKEN_SECRET 환경변수(또는 ~/.modal.toml)가 필요합니다.
-    run_stt = modal.Function.from_name("smartadv", "run_stt")
+    # 음성 인식 일꾼. 실제로 부르는 시점까지 연결을 미루므로, 여기서는 고르기만 한다.
+    print(f"[provider] {describe_providers()}")
+    stt = get_stt()
 
     # STEP 1. ffmpeg를 통한 분석 오디오 추출
 
@@ -432,10 +431,10 @@ def main():
         else:
             print(f"   -> 장면 전환 없음.")
 
-    # STEP 5. Modal GPU — 모든 context audio 클립 병렬 STT
+    # STEP 5. 모든 context audio 클립 전사
 
-    report_progress(28, "Modal GPU에서 병렬 음성 인식 전사 중...")
-    print("[5/5] Modal GPU에서 한국어 음성 전사 중...")
+    report_progress(28, "음성 인식 전사 중...")
+    print(f"[5/5] 한국어 음성 전사 중 (provider={stt.name})...")
 
     # STT를 돌릴 (summary_index, side_key, audio_path) 목록 수집
     stt_tasks = []
@@ -452,11 +451,8 @@ def main():
         summary['after_stt_segments'] = []
 
     if stt_tasks:
-        print(f"   -> {len(stt_tasks)}개 오디오 클립을 Modal에서 병렬 전사합니다...")
         audio_bytes_list = [Path(task[2]).read_bytes() for task in stt_tasks]
-
-        # .map() : 각 클립마다 Modal이 별도 GPU 컨테이너를 띄워 병렬 처리
-        stt_results = list(run_stt.map(audio_bytes_list))
+        stt_results = stt.transcribe_many(audio_bytes_list)
 
         # 결과를 silence_summaries에 채워 넣기
         for task, result in zip(stt_tasks, stt_results):

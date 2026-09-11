@@ -27,6 +27,16 @@ modal = ">=0.73.0"
 [tool.poetry.group.dev.dependencies]
 black = "^25.1.0"
 
+# 로컬 모델로 갈아탈 때만 필요한 것들. 기본 설치에는 들어가지 않는다.
+#   poetry install --with local
+# VLM 과 TTS 는 별도 서버(vLLM · Ollama · Kokoro 등)를 띄우고 HTTP 로 부르므로
+# 파이썬 쪽에 새로 깔 것이 없다. STT 만 이 프로세스 안에서 모델을 올린다.
+[tool.poetry.group.local]
+optional = true
+
+[tool.poetry.group.local.dependencies]
+faster-whisper = "^1.1.0"
+
 [tool.poetry.scripts]
 engine = "engine:main"
 llm = "LLM:main"
