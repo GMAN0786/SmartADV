@@ -49,6 +49,8 @@ public class ArchiveController {
 
             Map<String, Object> item = new HashMap<>();
             item.put("id", result.getId().toString());
+            // 재생 화면이 /api/results/video/{videoId} 로 결과를 다시 찾을 수 있게 함께 내려준다.
+            item.put("videoId", job.getVideoId());
             item.put("title", video.getOriginalFileName());
             item.put("type", "file");
             item.put("fileName", result.getMergedVideoPath());
