@@ -1,0 +1,83 @@
+/*
+ * 장면 톡 디자인 토큰
+ *
+ * 색은 테마별로 갈리고, 크기는 --k 배율 하나에 묶인다.
+ * --k 는 설정의 "글자 크기"가 1.0 ~ 2.0 사이로 움직이며,
+ * 글자뿐 아니라 여백과 최소 터치 영역까지 함께 늘려 화면이 잘리지 않게 한다.
+ */
+
+.st-app {
+  /* 글자 크기 배율. 설정 화면에서 100% ~ 200%. */
+  --k: 1;
+
+  /* 타입 스케일 — 본문 기준 17px. 화면해설 앱이라 전반적으로 크게 잡았다. */
+  --fs-100: calc(15px * var(--k));
+  --fs-200: calc(16px * var(--k));
+  --fs-300: calc(17px * var(--k));
+  --fs-400: calc(18px * var(--k));
+  --fs-500: calc(19px * var(--k));
+  --fs-600: calc(21px * var(--k));
+  --fs-700: calc(22px * var(--k));
+  --fs-800: calc(26px * var(--k));
+  --fs-900: calc(28px * var(--k));
+
+  /* 모서리 */
+  --r-sm: 8px;
+  --r-md: 12px;
+  --r-lg: 14px;
+  --r-xl: 16px;
+  --r-2xl: 18px;
+  --r-3xl: 22px;
+
+  /* 최소 터치 영역. WCAG 2.2 목표 크기(24px)를 넉넉히 넘긴다. */
+  --tap-sm: 48px;
+  --tap-md: 60px;
+  --tap-lg: 72px;
+  --tap-xl: 80px;
+}
+
+/* 기본값(다크)은 시스템 설정을 따르는 경우에도 쓰인다. */
+.st-app,
+.st-app[data-theme='dark'],
+.st-app[data-theme='system'] {
+  --bg: #000000;
+  --sf: #17171a;
+  --sf2: #232327;
+  --tx: #ffffff;
+  --tx2: #c8c8d0;
+  --acc: #ffd64a;
+  --acc-tx: #000000;
+  --acc-bd: #ffd64a;
+  --bd: #4a4a52;
+  --bd-w: 1px;
+  --ring: #ffd64a;
+}
+
+.st-app[data-theme='light'] {
+  --bg: #ffffff;
+  --sf: #f3f3f6;
+  --sf2: #e7e7ec;
+  --tx: #0d0d10;
+  --tx2: #45454e;
+  --acc: #ffc800;
+  --acc-tx: #1a1400;
+  --acc-bd: #1a1400;
+  --bd: #6a6a74;
+  --bd-w: 1px;
+  --ring: #0d0d10;
+}
+
+/* 고대비: 표면을 배경과 같은 검정으로 두고 흰 테두리로만 구분한다. */
+.st-app[data-theme='hc'] {
+  --bg: #000000;
+  --sf: #000000;
+  --sf2: #101014;
+  --tx: #ffffff;
+  --tx2: #ffffff;
+  --acc: #ffe600;
+  --acc-tx: #000000;
+  --acc-bd: #ffffff;
+  --bd: #ffffff;
+  --bd-w: 2px;
+  --ring: #ffe600;
+}

@@ -6,7 +6,9 @@ const apiProxyTarget = process.env.VITE_API_PROXY_TARGET ?? "http://localhost:80
 // https://vitejs.dev/config/
 export default defineConfig({
   build: {
+    // 하이브리드 앱 전환 시 Capacitor 의 webDir 로 그대로 쓰인다.
     outDir: "build",
+    sourcemap: true,
   },
   plugins: [react()],
   server: {
